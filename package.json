@@ -3,18 +3,26 @@
   "version": "0.1.0",
   "description": "Config-driven Node.js router for free/low-cost LLM providers with discovery, tiering, retry, fallback, and Cloudflare Workers AI support.",
   "type": "module",
-  "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "router.config.example.json",
+    "README.md"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsx src/server.ts",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "start": "node dist/server.js"
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "dotenv": "^16.4.7",
     "zod": "^3.24.1"
   },
   "devDependencies": {

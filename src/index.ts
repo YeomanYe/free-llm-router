@@ -8,7 +8,6 @@ export { classifyModelTier, withTier } from "./tiering.js";
 export { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
 export { CloudflareWorkersAIProvider } from "./providers/cloudflare.js";
 export { createRouterFromConfig, createRouterFromFile } from "./config.js";
-export { createFetchHandler, startServer } from "./server.js";
 export type {
   ChatMessage,
   ChatRequest,

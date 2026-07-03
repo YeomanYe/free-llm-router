@@ -1,6 +1,6 @@
 # Free LLM Router
 
-Config-driven Node.js router for free and low-cost LLM providers. It can be used as a library inside a Node project or as a small OpenAI-compatible gateway.
+Config-driven Node.js router for free and low-cost LLM providers. It is intended to be imported as a library inside another Node.js project.
 
 The project intentionally does not try to scrape or bypass provider policies. Provider APIs often do not expose whether a model is free, so free eligibility is a mix of discovery plus your maintained static policy metadata.
 
@@ -12,46 +12,30 @@ The project intentionally does not try to scrape or bypass provider policies. Pr
 - Static free-model metadata for providers that do not expose reliable free flags.
 - High / medium / low tier classification.
 - Retry and fallback across providers.
-- OpenAI-compatible HTTP endpoints: `/v1/models` and `/v1/chat/completions`.
 
 ## Install
 
+Install the package in your application:
+
+```bash
+npm install free-llm-router
+```
+
+For local development in this repository:
+
 ```bash
 npm install
-cp .env.example .env
 cp router.config.example.json router.config.json
 ```
 
 Fill in the keys you actually want to use. Delete providers you do not use from `router.config.json`.
 
-## Run As Gateway
+Configuration values such as `"env/OPENROUTER_API_KEY"` are resolved from `process.env`. Load environment variables in the consuming application if you keep keys in a `.env` file.
 
-```bash
-npm run dev -- router.config.json
-```
-
-List models:
-
-```bash
-curl http://localhost:8787/v1/models
-```
-
-Call chat completions:
-
-```bash
-curl http://localhost:8787/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "messages": [
-      { "role": "user", "content": "hello" }
-    ]
-  }'
-```
-
-## Use As A Node Library
+## Use In A Node Project
 
 ```ts
-import { createRouterFromFile } from "./src/config.js";
+import { createRouterFromFile } from "free-llm-router";
 
 const router = await createRouterFromFile("router.config.json");
 
