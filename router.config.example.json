@@ -1,0 +1,130 @@
+{
+  "freeOnly": true,
+  "retry": {
+    "maxRetries": 2,
+    "baseDelayMs": 200
+  },
+  "fallback": {
+    "tiers": ["high", "medium", "low"]
+  },
+  "providers": [
+    {
+      "type": "openai-compatible",
+      "name": "openrouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "env/OPENROUTER_API_KEY",
+      "freeModelPatterns": [":free"],
+      "staticModels": [
+        {
+          "id": "meta-llama/llama-3.3-70b-instruct:free",
+          "free": true,
+          "contextWindow": 131072,
+          "qualityScore": 0.82
+        }
+      ]
+    },
+    {
+      "type": "openai-compatible",
+      "name": "groq",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "apiKey": "env/GROQ_API_KEY",
+      "staticModels": [
+        {
+          "id": "llama-3.3-70b-versatile",
+          "free": true,
+          "contextWindow": 32768,
+          "qualityScore": 0.8
+        }
+      ]
+    },
+    {
+      "type": "openai-compatible",
+      "name": "gemini-openai-compatible",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "apiKey": "env/GEMINI_API_KEY",
+      "staticModels": [
+        {
+          "id": "gemini-2.0-flash",
+          "free": true,
+          "contextWindow": 1048576,
+          "qualityScore": 0.78
+        }
+      ]
+    },
+    {
+      "type": "openai-compatible",
+      "name": "mistral",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "apiKey": "env/MISTRAL_API_KEY",
+      "staticModels": [
+        {
+          "id": "mistral-small-latest",
+          "free": true,
+          "contextWindow": 32768,
+          "qualityScore": 0.64
+        }
+      ]
+    },
+    {
+      "type": "openai-compatible",
+      "name": "huggingface",
+      "baseUrl": "https://router.huggingface.co/v1",
+      "apiKey": "env/HUGGINGFACE_TOKEN",
+      "staticModels": [
+        {
+          "id": "meta-llama/Llama-3.1-8B-Instruct",
+          "free": true,
+          "contextWindow": 8192,
+          "qualityScore": 0.5
+        }
+      ]
+    },
+    {
+      "type": "openai-compatible",
+      "name": "github-models",
+      "baseUrl": "https://models.github.ai/inference",
+      "apiKey": "env/GITHUB_TOKEN",
+      "staticModels": [
+        {
+          "id": "openai/gpt-4.1-mini",
+          "free": true,
+          "contextWindow": 1047576,
+          "qualityScore": 0.76
+        }
+      ]
+    },
+    {
+      "type": "openai-compatible",
+      "name": "cerebras",
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "apiKey": "env/CEREBRAS_API_KEY",
+      "staticModels": [
+        {
+          "id": "llama3.1-8b",
+          "free": true,
+          "contextWindow": 8192,
+          "qualityScore": 0.5
+        }
+      ]
+    },
+    {
+      "type": "cloudflare-workers-ai",
+      "accountId": "env/CLOUDFLARE_ACCOUNT_ID",
+      "apiToken": "env/CLOUDFLARE_API_TOKEN",
+      "staticModels": [
+        {
+          "id": "@cf/meta/llama-3.1-8b-instruct",
+          "free": true,
+          "contextWindow": 8192,
+          "qualityScore": 0.55
+        },
+        {
+          "id": "@cf/mistral/mistral-7b-instruct-v0.2-lora",
+          "free": true,
+          "contextWindow": 8192,
+          "qualityScore": 0.5
+        }
+      ]
+    }
+  ]
+}
