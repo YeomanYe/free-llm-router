@@ -25,6 +25,9 @@ async function main(): Promise<void> {
     case "chat":
       await runChat(rest);
       return;
+    case "race":
+      await runRace(rest);
+      return;
     case "models":
       await runModels(rest);
       return;
@@ -85,6 +88,56 @@ async function runChat(argv: string[]): Promise<void> {
 
   console.log(response.content);
   console.error(`\n(via ${response.provider}/${response.model})`);
+}
+
+async function runRace(argv: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      config: { type: "string" },
+      "env-file": { type: "string", multiple: true },
+      "free-only": { type: "boolean" },
+      "no-free-only": { type: "boolean" },
+      tier: { type: "string" },
+      model: { type: "string" },
+      models: { type: "string" },
+      providers: { type: "string" },
+      "max-tokens": { type: "string" },
+      temperature: { type: "string" },
+      system: { type: "string" }
+    }
+  });
+
+  const prompt = positionals.join(" ").trim();
+  if (!prompt) {
+    console.error("race: missing prompt");
+    process.exit(1);
+  }
+
+  const router = await bootstrap({
+    config: values.config,
+    envFile: values["env-file"],
+    freeOnly: resolveFreeOnly(values)
+  });
+
+  const messages: ChatMessage[] = [];
+  if (values.system) messages.push({ role: "system", content: values.system });
+  messages.push({ role: "user", content: prompt });
+
+  const started = Date.now();
+  const response = await router.chatRace({
+    messages,
+    tier: coerceTier(values.tier),
+    model: values.model,
+    models: splitList(values.models),
+    providers: splitList(values.providers),
+    maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
+    temperature: values.temperature ? Number(values.temperature) : undefined
+  });
+
+  console.log(response.content);
+  console.error(`\n(via ${response.provider}/${response.model} in ${Date.now() - started}ms)`);
 }
 
 async function runModels(argv: string[]): Promise<void> {
@@ -322,9 +375,10 @@ Usage:
   flr <command> [flags]
 
 Commands:
-  chat <prompt>       Route a single prompt through the configured providers
+  chat <prompt>       Sequential fallback, first success wins
+  race <prompt>       Fire every candidate in parallel, first success wins
   models              List every callable model, grouped by provider
-  broadcast <prompt>  Send one prompt to every model and print each response
+  broadcast <prompt>  Fire every candidate in parallel, print all responses
 
 Common flags:
   --config <path>       Config file (default: ./router.config.json, then router.config.example.json)

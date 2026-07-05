@@ -9,6 +9,7 @@ export { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
 export { CloudflareWorkersAIProvider } from "./providers/cloudflare.js";
 export { createRouterFromConfig, createRouterFromFile } from "./config.js";
 export type {
+  ChatAllResult,
   ChatMessage,
   ChatRequest,
   ChatResponse,

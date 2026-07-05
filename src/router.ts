@@ -2,6 +2,7 @@ import { NoAvailableModelError, isRetryableError } from "./errors.js";
 import { withTier } from "./tiering.js";
 import {
   MODEL_TIERS,
+  type ChatAllResult,
   type ChatRequest,
   type ChatResponse,
   type DiscoveredModel,
@@ -52,23 +53,10 @@ export class ModelRouter {
     let lastError: unknown;
 
     for (const candidate of candidates) {
-      for (let attempt = 0; attempt <= this.retry.maxRetries; attempt += 1) {
-        try {
-          return await candidate.provider.chat({
-            ...request,
-            model: candidate.model.id
-          });
-        } catch (error) {
-          lastError = error;
-
-          if (!isRetryableError(error)) {
-            break;
-          }
-
-          if (attempt < this.retry.maxRetries) {
-            await sleep(this.retry.baseDelayMs * attempt);
-          }
-        }
+      try {
+        return await this.callWithRetry(candidate, request);
+      } catch (error) {
+        lastError = error;
       }
     }
 
@@ -77,6 +65,51 @@ export class ModelRouter {
     }
 
     throw new NoAvailableModelError();
+  }
+
+  async chatRace(request: ChatRequest): Promise<ChatResponse> {
+    const candidates = await this.selectCandidates(request);
+    if (candidates.length === 0) throw new NoAvailableModelError();
+
+    try {
+      return await Promise.any(candidates.map((c) => this.callWithRetry(c, request)));
+    } catch (aggregate) {
+      const first = (aggregate as AggregateError).errors?.[0];
+      throw first instanceof Error ? first : new NoAvailableModelError();
+    }
+  }
+
+  async chatAll(request: ChatRequest): Promise<ChatAllResult[]> {
+    const candidates = await this.selectCandidates(request);
+    if (candidates.length === 0) throw new NoAvailableModelError();
+
+    return Promise.all(
+      candidates.map(async (candidate) => {
+        const label = { provider: candidate.provider.name, model: candidate.model.id };
+        try {
+          const response = await this.callWithRetry(candidate, request);
+          return { ...label, response };
+        } catch (error) {
+          return { ...label, error: error instanceof Error ? error : new Error(String(error)) };
+        }
+      })
+    );
+  }
+
+  private async callWithRetry(candidate: Candidate, request: ChatRequest): Promise<ChatResponse> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.retry.maxRetries; attempt += 1) {
+      try {
+        return await candidate.provider.chat({ ...request, model: candidate.model.id });
+      } catch (error) {
+        lastError = error;
+        if (!isRetryableError(error)) break;
+        if (attempt < this.retry.maxRetries) {
+          await sleep(this.retry.baseDelayMs * attempt);
+        }
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("chat failed");
   }
 
   private async selectCandidates(request: ChatRequest): Promise<Candidate[]> {

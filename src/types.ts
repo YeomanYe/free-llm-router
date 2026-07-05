@@ -55,6 +55,13 @@ export interface ChatResponse {
   usage?: ChatUsage;
 }
 
+export interface ChatAllResult {
+  provider: string;
+  model: string;
+  response?: ChatResponse;
+  error?: Error;
+}
+
 export interface ModelCapabilities {
   chat?: boolean;
   tools?: boolean;

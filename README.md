@@ -49,6 +49,16 @@ const response = await router.chat({
 console.log(response.content);
 ```
 
+Alongside `chat` (sequential fallback) the router also exposes two parallel primitives:
+
+```ts
+// Fire every matching candidate in parallel, resolve with the first success.
+const fastest = await router.chatRace({ tier: "medium-1", messages });
+
+// Fire every matching candidate in parallel, return per-candidate {response, error}.
+const compared = await router.chatAll({ tier: "medium-1", messages });
+```
+
 ## CLI
 
 The package installs a `flr` binary. Point it at a config and (optionally) an env file:
@@ -64,6 +74,10 @@ flr chat --model bigmodel/glm-4.5-flash "..."
 # Ordered sequences: walk the list, first success wins
 flr chat --models "bigmodel/glm-4-flash,cloudflare/@cf/openai/gpt-oss-20b" "..."
 flr chat --providers "bigmodel,cloudflare,openrouter" --tier medium-1 "..."
+
+# Fire every candidate in parallel and return whoever answers first
+flr race --tier medium-1 "..."
+flr race --providers "bigmodel,cloudflare" "..."
 
 # Enumerate every callable model, grouped by provider
 flr models

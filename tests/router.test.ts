@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ModelRouter, RetryableProviderError } from "../src/index.js";
+import { ModelRouter, ProviderError, RetryableProviderError } from "../src/index.js";
 import type {
   ChatRequest,
   ChatResponse,
@@ -120,4 +120,74 @@ describe("ModelRouter", () => {
     expect(beta.attempts).toBe(0);
     expect(gamma.attempts).toBe(1);
   });
+
+  it("chatRace returns the first successful response and hits every candidate", async () => {
+    const slow = new SlowProvider("slow", 40);
+    const fast = new SlowProvider("fast", 5);
+    const router = new ModelRouter({
+      providers: [slow, fast],
+      retry: { maxRetries: 0, baseDelayMs: 0 }
+    });
+
+    const response = await router.chatRace({
+      messages: [{ role: "user", content: "hi" }]
+    });
+
+    expect(response.provider).toBe("fast");
+    expect(slow.attempts).toBe(1);
+    expect(fast.attempts).toBe(1);
+  });
+
+  it("chatAll returns per-candidate results including errors", async () => {
+    const ok = new FakeProvider("ok", "succeed");
+    const broken = new FakeProvider("broken", "always-fail");
+    const router = new ModelRouter({
+      providers: [ok, broken],
+      retry: { maxRetries: 0, baseDelayMs: 0 }
+    });
+
+    const results = await router.chatAll({
+      messages: [{ role: "user", content: "hi" }]
+    });
+
+    const okResult = results.find((r) => r.provider === "ok");
+    const brokenResult = results.find((r) => r.provider === "broken");
+    expect(okResult?.response?.content).toBe("fallback ok");
+    expect(brokenResult?.error?.message).toContain("rate limited");
+    expect(ok.attempts).toBe(1);
+    expect(broken.attempts).toBe(1);
+  });
 });
+
+class SlowProvider implements ProviderAdapter {
+  readonly kind = "slow";
+  attempts = 0;
+  constructor(readonly name: string, private readonly delayMs: number) {}
+  async listModels(): Promise<DiscoveredModel[]> {
+    return [
+      {
+        id: `${this.name}/model`,
+        provider: this.name,
+        name: `${this.name}/model`,
+        free: true,
+        source: "static",
+        capabilities: { chat: true },
+        contextWindow: 32_000,
+        qualityScore: 0.8
+      }
+    ];
+  }
+  async chat(request: ChatRequest & { model: string }): Promise<ChatResponse> {
+    this.attempts += 1;
+    await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+    return {
+      id: `chat-${this.name}`,
+      model: request.model,
+      provider: this.name,
+      content: `hello from ${this.name}`,
+      raw: {}
+    };
+  }
+}
+// Silence unused warning — ProviderError kept for future ergonomic imports.
+void ProviderError;
