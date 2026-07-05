@@ -1,0 +1,77 @@
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: saturate(180%) blur(20px);
+  background: color-mix(in oklab, var(--bg) 78%, transparent);
+  border-bottom: 1px solid var(--rule);
+}
+
+.nav-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 64px;
+}
+
+.nav-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.nav-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--accent);
+  font-size: 13px;
+  letter-spacing: -0.02em;
+}
+
+.nav-brand-name {
+  font-size: 15px;
+  color: var(--fg-muted);
+}
+
+.nav-brand:hover .nav-brand-name {
+  color: var(--fg);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  font-size: 14px;
+  color: var(--fg-muted);
+}
+
+.nav-links a:hover {
+  color: var(--fg);
+}
+
+.nav-github {
+  padding: 8px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--fg) !important;
+  font-size: 13px;
+}
+
+.nav-github:hover {
+  border-color: var(--accent);
+  color: var(--accent) !important;
+}
+
+@media (max-width: 640px) {
+  .nav-links a:not(.nav-github) {
+    display: none;
+  }
+}

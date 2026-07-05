@@ -1,0 +1,205 @@
+.hero {
+  padding-top: 120px !important;
+  padding-bottom: 96px !important;
+}
+
+.hero-inner {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 80px;
+  align-items: center;
+}
+
+.hero-title {
+  font-size: clamp(48px, 8vw, 112px);
+  line-height: 0.94;
+  letter-spacing: -0.045em;
+  font-weight: 500;
+  margin: 24px 0 24px;
+}
+
+.hero-sub {
+  max-width: 52ch;
+  color: var(--fg-muted);
+  font-size: 18px;
+  line-height: 1.6;
+  margin: 0 0 40px;
+}
+
+.hero-sub .mono {
+  color: var(--fg);
+  font-size: 15px;
+  padding: 1px 6px;
+  background: var(--bg-soft);
+  border-radius: 2px;
+}
+
+.hero-cta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 22px;
+  font-size: 14px;
+  font-weight: 500;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  transition: border-color 200ms, background 200ms, color 200ms;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--bg) !important;
+  border-color: var(--accent);
+}
+
+.btn-primary:hover {
+  background: transparent;
+  color: var(--accent) !important;
+}
+
+.btn-ghost:hover {
+  border-color: var(--fg);
+  color: var(--fg);
+}
+
+/* Terminal card */
+.hero-terminal {
+  position: relative;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #0f0f0d 0%, #0a0a09 100%);
+  box-shadow: 0 30px 80px -30px rgba(184, 255, 62, 0.08),
+    0 8px 30px rgba(0, 0, 0, 0.4);
+}
+
+.term-chrome {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+  background: #08080703;
+}
+
+.term-dots {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.term-dots span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+}
+
+.term-dots span:nth-child(1) {
+  background: #4d4a44;
+}
+.term-dots span:nth-child(2) {
+  background: #4d4a44;
+}
+.term-dots span:nth-child(3) {
+  background: #4d4a44;
+}
+
+.term-title {
+  font-size: 12px;
+  color: var(--fg-muted);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.term-spacer {
+  flex: 1;
+}
+
+.term-body {
+  padding: 22px 22px 26px;
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: var(--fg);
+  min-height: 220px;
+}
+
+.term-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.term-prompt {
+  color: var(--accent);
+  user-select: none;
+}
+
+.term-cmd {
+  color: var(--fg);
+}
+
+.term-out {
+  color: var(--fg);
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+}
+
+.term-out-dim {
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  margin-top: 18px;
+}
+
+.term-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+  border-radius: 2px;
+  font-size: 12.5px;
+}
+
+.term-accent {
+  color: var(--accent);
+  margin-right: 6px;
+}
+
+.caret {
+  display: inline-block;
+  width: 8px;
+  height: 1em;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: caret-blink 1s steps(2, end) infinite;
+  margin-left: 2px;
+}
+
+.caret-idle {
+  opacity: 0.6;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .hero-inner {
+    grid-template-columns: 1fr;
+    gap: 56px;
+  }
+  .hero {
+    padding-top: 72px !important;
+  }
+}

@@ -1,0 +1,16 @@
+/* Section-agnostic app-level layout. Component-specific rules stay in their own files. */
+
+main > section {
+  padding: 96px 0 112px;
+}
+
+.wrap-rule {
+  width: min(1240px, calc(100vw - 64px));
+  margin: 0 auto;
+}
+
+@media (max-width: 720px) {
+  main > section {
+    padding: 64px 0 72px;
+  }
+}

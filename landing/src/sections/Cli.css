@@ -1,0 +1,159 @@
+.cli-inner {
+  display: grid;
+  gap: 56px;
+}
+
+.cli-header {
+  max-width: 800px;
+}
+
+.cli-title-accent {
+  color: var(--fg-muted);
+}
+
+.cli-lead {
+  color: var(--fg-muted);
+  font-size: 17px;
+  line-height: 1.6;
+  max-width: 56ch;
+  margin: 24px 0 0;
+}
+
+/* Tabs */
+.cli-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.cli-tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--rule);
+  padding: 18px 20px;
+  text-align: left;
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: background 200ms, color 200ms;
+}
+
+.cli-tab:last-child {
+  border-right: 0;
+}
+
+.cli-tab:hover {
+  color: var(--fg);
+}
+
+.cli-tab.is-active {
+  background: var(--bg-soft);
+  color: var(--fg);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.cli-tab-name {
+  font-size: 14px;
+}
+
+.cli-tab.is-active .cli-tab-name {
+  color: var(--accent);
+}
+
+.cli-tab-hint {
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.cli-tab.is-active .cli-tab-hint {
+  color: var(--fg-muted);
+}
+
+/* Panel */
+.cli-panel {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 40px;
+  padding: 40px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--bg-soft) 0%, var(--bg) 100%);
+}
+
+.cli-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.cli-blurb {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.cli-code {
+  margin: 0;
+  padding: 22px 24px;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--fg);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.cli-code code::before {
+  content: "$ ";
+  color: var(--accent);
+}
+
+.cli-side dl {
+  margin: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.cli-side dt {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.cli-side dd {
+  margin: 6px 0 0;
+  color: var(--fg-muted);
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.cli-side dd.mono {
+  color: var(--fg);
+  font-size: 13.5px;
+}
+
+@media (max-width: 900px) {
+  .cli-tabs {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .cli-tab {
+    border-bottom: 1px solid var(--rule);
+  }
+  .cli-panel {
+    grid-template-columns: 1fr;
+    padding: 28px;
+  }
+}

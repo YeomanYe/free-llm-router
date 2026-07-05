@@ -1,0 +1,86 @@
+.install-inner {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 56px;
+}
+
+.install-header {
+  max-width: 720px;
+}
+
+.section-title {
+  font-size: clamp(32px, 4.6vw, 60px);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  font-weight: 500;
+  margin: 20px 0 0;
+}
+
+.install-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+}
+
+.install-step {
+  background: var(--bg);
+  padding: 32px 28px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.install-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.install-step-num {
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+}
+
+.install-step-title {
+  font-size: 22px;
+  font-weight: 500;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.install-step-body {
+  color: var(--fg-muted);
+  font-size: 15px;
+  line-height: 1.55;
+  margin: 0;
+  flex: 1;
+}
+
+.install-step-code {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--bg-soft);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  font-size: 13.5px;
+  color: var(--fg);
+  overflow-x: auto;
+}
+
+.install-step-code .term-prompt {
+  color: var(--accent);
+  margin-right: 8px;
+  user-select: none;
+}
+
+@media (max-width: 900px) {
+  .install-steps {
+    grid-template-columns: 1fr;
+  }
+}
