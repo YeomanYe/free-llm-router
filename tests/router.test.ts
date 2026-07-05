@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { ModelRouter, ProviderError, RetryableProviderError } from "../src/index.js";
+import {
+  ModelRouter,
+  ProviderError,
+  RetryableProviderError,
+  pickBestModelPerProvider
+} from "../src/index.js";
 import type {
   ChatRequest,
   ChatResponse,
@@ -138,6 +143,37 @@ describe("ModelRouter", () => {
     expect(fast.attempts).toBe(1);
   });
 
+  it("chatAll perProvider fires only the top-qualityScore model per provider", async () => {
+    const heavy = new MultiModelProvider("heavy", [
+      { id: "heavy/a", qualityScore: 0.4 },
+      { id: "heavy/b", qualityScore: 0.9 },
+      { id: "heavy/c", qualityScore: 0.7 }
+    ]);
+    const solo = new MultiModelProvider("solo", [{ id: "solo/x", qualityScore: 0.6 }]);
+    const router = new ModelRouter({
+      providers: [heavy, solo],
+      retry: { maxRetries: 0, baseDelayMs: 0 }
+    });
+
+    const results = await router.chatAll(
+      { messages: [{ role: "user", content: "hi" }] },
+      { perProvider: true }
+    );
+
+    expect(results.map((r) => r.model).sort()).toEqual(["heavy/b", "solo/x"]);
+    expect(heavy.attemptedIds).toEqual(["heavy/b"]);
+    expect(solo.attemptedIds).toEqual(["solo/x"]);
+  });
+
+  it("pickBestModelPerProvider keeps highest qualityScore only", () => {
+    const picked = pickBestModelPerProvider([
+      { id: "a", provider: "p1", name: "a", free: true, source: "static", capabilities: { chat: true }, qualityScore: 0.4 },
+      { id: "b", provider: "p1", name: "b", free: true, source: "static", capabilities: { chat: true }, qualityScore: 0.8 },
+      { id: "c", provider: "p2", name: "c", free: true, source: "static", capabilities: { chat: true }, qualityScore: 0.5 }
+    ]);
+    expect(picked.map((m) => m.id).sort()).toEqual(["b", "c"]);
+  });
+
   it("chatAll returns per-candidate results including errors", async () => {
     const ok = new FakeProvider("ok", "succeed");
     const broken = new FakeProvider("broken", "always-fail");
@@ -158,6 +194,36 @@ describe("ModelRouter", () => {
     expect(broken.attempts).toBe(1);
   });
 });
+
+class MultiModelProvider implements ProviderAdapter {
+  readonly kind = "multi";
+  attemptedIds: string[] = [];
+  constructor(
+    readonly name: string,
+    private readonly models: Array<{ id: string; qualityScore?: number }>
+  ) {}
+  async listModels(): Promise<DiscoveredModel[]> {
+    return this.models.map((m) => ({
+      id: m.id,
+      provider: this.name,
+      name: m.id,
+      free: true,
+      source: "static",
+      capabilities: { chat: true },
+      qualityScore: m.qualityScore
+    }));
+  }
+  async chat(request: ChatRequest & { model: string }): Promise<ChatResponse> {
+    this.attemptedIds.push(request.model);
+    return {
+      id: `chat-${request.model}`,
+      model: request.model,
+      provider: this.name,
+      content: `hello from ${request.model}`,
+      raw: {}
+    };
+  }
+}
 
 class SlowProvider implements ProviderAdapter {
   readonly kind = "slow";

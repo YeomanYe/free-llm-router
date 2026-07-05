@@ -79,6 +79,10 @@ flr chat --providers "bigmodel,cloudflare,openrouter" --tier medium-1 "..."
 flr race --tier medium-1 "..."
 flr race --providers "bigmodel,cloudflare" "..."
 
+# Fan-out to one model per provider (top qualityScore) instead of every model
+flr broadcast --per-provider --tier medium-1 "..."
+flr race --per-provider "..."
+
 # Enumerate every callable model, grouped by provider
 flr models
 flr models --json

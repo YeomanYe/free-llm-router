@@ -1,4 +1,5 @@
-export { ModelRouter } from "./router.js";
+export { ModelRouter, pickBestModelPerProvider } from "./router.js";
+export type { FanOutOptions } from "./router.js";
 export {
   NoAvailableModelError,
   ProviderError,

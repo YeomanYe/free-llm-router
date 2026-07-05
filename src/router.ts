@@ -17,6 +17,35 @@ interface Candidate {
   model: DiscoveredModel;
 }
 
+export interface FanOutOptions {
+  perProvider?: boolean;
+}
+
+// Keeps only the highest-qualityScore candidate per provider name, preserving
+// the first-seen provider order so downstream printing stays deterministic.
+function pickCandidates(candidates: Candidate[], options?: FanOutOptions): Candidate[] {
+  if (!options?.perProvider) return candidates;
+  const best = new Map<string, Candidate>();
+  for (const c of candidates) {
+    const cur = best.get(c.provider.name);
+    if (!cur || (c.model.qualityScore ?? 0) > (cur.model.qualityScore ?? 0)) {
+      best.set(c.provider.name, c);
+    }
+  }
+  return [...best.values()];
+}
+
+export function pickBestModelPerProvider(models: DiscoveredModel[]): DiscoveredModel[] {
+  const best = new Map<string, DiscoveredModel>();
+  for (const m of models) {
+    const cur = best.get(m.provider);
+    if (!cur || (m.qualityScore ?? 0) > (cur.qualityScore ?? 0)) {
+      best.set(m.provider, m);
+    }
+  }
+  return [...best.values()];
+}
+
 export class ModelRouter {
   private readonly providers: ProviderAdapter[];
 
@@ -67,8 +96,8 @@ export class ModelRouter {
     throw new NoAvailableModelError();
   }
 
-  async chatRace(request: ChatRequest): Promise<ChatResponse> {
-    const candidates = await this.selectCandidates(request);
+  async chatRace(request: ChatRequest, options?: FanOutOptions): Promise<ChatResponse> {
+    const candidates = pickCandidates(await this.selectCandidates(request), options);
     if (candidates.length === 0) throw new NoAvailableModelError();
 
     try {
@@ -79,8 +108,8 @@ export class ModelRouter {
     }
   }
 
-  async chatAll(request: ChatRequest): Promise<ChatAllResult[]> {
-    const candidates = await this.selectCandidates(request);
+  async chatAll(request: ChatRequest, options?: FanOutOptions): Promise<ChatAllResult[]> {
+    const candidates = pickCandidates(await this.selectCandidates(request), options);
     if (candidates.length === 0) throw new NoAvailableModelError();
 
     return Promise.all(

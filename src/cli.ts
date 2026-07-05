@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { createRouterFromConfig } from "./config.js";
+import { pickBestModelPerProvider } from "./router.js";
 import { MODEL_TIERS, type ChatMessage, type ModelTier } from "./types.js";
 
 interface CommonOptions {
@@ -103,6 +104,7 @@ async function runRace(argv: string[]): Promise<void> {
       model: { type: "string" },
       models: { type: "string" },
       providers: { type: "string" },
+      "per-provider": { type: "boolean" },
       "max-tokens": { type: "string" },
       temperature: { type: "string" },
       system: { type: "string" }
@@ -126,15 +128,18 @@ async function runRace(argv: string[]): Promise<void> {
   messages.push({ role: "user", content: prompt });
 
   const started = Date.now();
-  const response = await router.chatRace({
-    messages,
-    tier: coerceTier(values.tier),
-    model: values.model,
-    models: splitList(values.models),
-    providers: splitList(values.providers),
-    maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
-    temperature: values.temperature ? Number(values.temperature) : undefined
-  });
+  const response = await router.chatRace(
+    {
+      messages,
+      tier: coerceTier(values.tier),
+      model: values.model,
+      models: splitList(values.models),
+      providers: splitList(values.providers),
+      maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
+      temperature: values.temperature ? Number(values.temperature) : undefined
+    },
+    { perProvider: values["per-provider"] }
+  );
 
   console.log(response.content);
   console.error(`\n(via ${response.provider}/${response.model} in ${Date.now() - started}ms)`);
@@ -197,7 +202,8 @@ async function runBroadcast(argv: string[]): Promise<void> {
       "no-free-only": { type: "boolean" },
       "max-tokens": { type: "string" },
       timeout: { type: "string" },
-      tier: { type: "string" }
+      tier: { type: "string" },
+      "per-provider": { type: "boolean" }
     }
   });
 
@@ -218,7 +224,8 @@ async function runBroadcast(argv: string[]): Promise<void> {
 
   const allModels = await router.listModels();
   const tier = coerceTier(values.tier);
-  const models = tier ? allModels.filter((m) => m.tier === tier) : allModels;
+  const filtered = tier ? allModels.filter((m) => m.tier === tier) : allModels;
+  const models = values["per-provider"] ? pickBestModelPerProvider(filtered) : filtered;
 
   if (models.length === 0) {
     console.error("broadcast: no models matched the filter");
@@ -398,8 +405,13 @@ chat flags:
 models flags:
   --json                Emit raw JSON instead of the grouped table
 
+race flags:
+  Same as chat, plus:
+  --per-provider        Race one best-quality model per provider (dedup fan-out)
+
 broadcast flags:
   --tier <t>            Only broadcast to models in this tier
+  --per-provider        Print one response per provider (top-qualityScore pick)
   --max-tokens <n>      Per-call cap (default 200)
   --timeout <ms>        Per-call timeout in ms (default 60000)
 `);
