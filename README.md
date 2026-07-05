@@ -118,6 +118,17 @@ flr broadcast --tier medium-1 --timeout 30000 "hi"
 
 During local development the same commands are available via `npm run cli -- <args>`, which shells to `tsx src/cli.ts` and skips the build step.
 
+### Env file resolution
+
+Set once, use everywhere. The CLI walks these sources top-down and keeps the first value for each key; anything already exported in `process.env` beats every file:
+
+1. `--env-file <path>` — explicit CLI args (repeatable)
+2. `./.env` — project-local
+3. `$FLR_ENV_FILE` — path from the shell env var; put this in your rc file to point at a shared secrets file, e.g. `export FLR_ENV_FILE=$HOME/Documents/knowledge/local/.env`
+4. `~/.flr/env` — conventional user default; create the file or symlink to your secrets file (`ln -s ~/Documents/knowledge/local/.env ~/.flr/env`)
+
+Once either 3 or 4 is set up, `flr chat "..."` works without any extra flags.
+
 ## Provider Notes
 
 OpenAI-compatible providers use:

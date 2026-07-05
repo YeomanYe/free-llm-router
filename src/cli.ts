@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -340,8 +341,7 @@ async function runBroadcast(argv: string[]): Promise<void> {
 }
 
 async function bootstrap(options: CommonOptions) {
-  for (const path of options.envFile ?? []) loadEnvFile(path);
-  if (existsSync(".env")) loadEnvFile(".env");
+  loadDefaultEnvFiles(options.envFile ?? []);
 
   const configPath = resolveConfigPath(options.config);
   const rawConfig = JSON.parse(readFileSync(configPath, "utf8"));
@@ -391,12 +391,12 @@ function filterAvailableProviders(providers: any[]): any[] {
   });
 }
 
-function loadEnvFile(path: string): void {
+function loadEnvFile(path: string, options: { quietMissing?: boolean } = {}): void {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
   } catch {
-    console.error(`env file not readable: ${path}`);
+    if (!options.quietMissing) console.error(`env file not readable: ${path}`);
     return;
   }
   for (const line of raw.split("\n")) {
@@ -408,6 +408,19 @@ function loadEnvFile(path: string): void {
     const value = trimmed.slice(eq + 1).trim();
     if (!(key in process.env)) process.env[key] = value;
   }
+}
+
+// Layered env resolution: explicit --env-file wins first, then the project's
+// .env, then a shell-configured default path, then the ~/.flr/env convention.
+// A previously exported process.env value always beats every file source
+// because loadEnvFile only sets keys not already present.
+function loadDefaultEnvFiles(explicit: string[]): void {
+  for (const path of explicit) loadEnvFile(path);
+  if (existsSync(".env")) loadEnvFile(".env");
+  const fromEnvVar = process.env.FLR_ENV_FILE;
+  if (fromEnvVar) loadEnvFile(fromEnvVar, { quietMissing: true });
+  const conventional = resolve(homedir(), ".flr", "env");
+  if (existsSync(conventional)) loadEnvFile(conventional);
 }
 
 function printUsage(router: ModelRouter, byOption: string | undefined): void {
@@ -500,9 +513,15 @@ Commands:
 
 Common flags:
   --config <path>       Config file (default: ./router.config.json, then router.config.example.json)
-  --env-file <path>     Load an env file into process.env (repeatable)
+  --env-file <path>     Load an extra env file into process.env (repeatable)
   --free-only           Only route to models flagged free (default from config)
   --no-free-only        Route to any model (paid included)
+
+Env file resolution (loaded top-down, first-set wins; process.env always beats files):
+  1. --env-file <path>          explicit CLI args
+  2. ./.env                     project-local
+  3. $FLR_ENV_FILE              user default via env var (e.g. export in shell rc)
+  4. ~/.flr/env                 conventional user default (create or symlink here)
 
 chat flags:
   --tier <t>            Force a tier, e.g. high-1, medium-2, low-3
