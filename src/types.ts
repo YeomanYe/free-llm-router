@@ -66,6 +66,18 @@ export interface ChatAllResult {
   error?: Error;
 }
 
+// Rolling counters kept per provider (or provider/model when queried in that mode).
+// Requests counts every provider.chat() attempt including retries, so it aligns
+// with what the provider actually bills.
+export interface UsageStats {
+  requests: number;
+  successes: number;
+  errors: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
 export interface ModelCapabilities {
   chat?: boolean;
   tools?: boolean;

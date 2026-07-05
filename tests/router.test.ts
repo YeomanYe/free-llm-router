@@ -261,6 +261,95 @@ class MultiModelProvider implements ProviderAdapter {
   }
 }
 
+describe("ModelRouter usage tracking", () => {
+  it("aggregates per-provider tokens across chat calls and exposes reset", async () => {
+    const alpha = new UsageProvider("alpha", { prompt: 10, completion: 20 });
+    const beta = new UsageProvider("beta", { prompt: 5, completion: 15 });
+    const router = new ModelRouter({
+      providers: [alpha, beta],
+      retry: { maxRetries: 0, baseDelayMs: 0 }
+    });
+
+    await router.chat({ messages: [{ role: "user", content: "hi" }], model: "alpha/model" });
+    await router.chat({ messages: [{ role: "user", content: "hi" }], model: "alpha/model" });
+    await router.chat({ messages: [{ role: "user", content: "hi" }], model: "beta/model" });
+
+    const byProvider = router.getUsage();
+    expect(byProvider.alpha).toEqual({
+      requests: 2,
+      successes: 2,
+      errors: 0,
+      promptTokens: 20,
+      completionTokens: 40,
+      totalTokens: 60
+    });
+    expect(byProvider.beta.totalTokens).toBe(20);
+
+    const byModel = router.getUsage({ by: "model" });
+    expect(byModel["alpha/alpha/model"].requests).toBe(2);
+    expect(byModel["beta/beta/model"].requests).toBe(1);
+
+    router.resetUsage();
+    expect(router.getUsage()).toEqual({});
+  });
+
+  it("counts retries as separate provider requests", async () => {
+    const flaky = new UsageProvider("flaky", { prompt: 1, completion: 1 }, { failFirst: 2 });
+    const router = new ModelRouter({
+      providers: [flaky],
+      retry: { maxRetries: 2, baseDelayMs: 0 }
+    });
+
+    await router.chat({ messages: [{ role: "user", content: "hi" }] });
+
+    const usage = router.getUsage();
+    expect(usage.flaky.requests).toBe(3);
+    expect(usage.flaky.errors).toBe(2);
+    expect(usage.flaky.successes).toBe(1);
+  });
+});
+
+class UsageProvider implements ProviderAdapter {
+  readonly kind = "usage";
+  private attemptIndex = 0;
+  constructor(
+    readonly name: string,
+    private readonly usage: { prompt: number; completion: number },
+    private readonly options: { failFirst?: number } = {}
+  ) {}
+  async listModels(): Promise<DiscoveredModel[]> {
+    return [
+      {
+        id: `${this.name}/model`,
+        provider: this.name,
+        name: `${this.name}/model`,
+        free: true,
+        source: "static",
+        capabilities: { chat: true },
+        qualityScore: 0.8
+      }
+    ];
+  }
+  async chat(request: ChatRequest & { model: string }): Promise<ChatResponse> {
+    this.attemptIndex += 1;
+    if (this.options.failFirst && this.attemptIndex <= this.options.failFirst) {
+      throw new RetryableProviderError(this.name, "flaky");
+    }
+    return {
+      id: `chat-${this.attemptIndex}`,
+      model: request.model,
+      provider: this.name,
+      content: "ok",
+      raw: {},
+      usage: {
+        promptTokens: this.usage.prompt,
+        completionTokens: this.usage.completion,
+        totalTokens: this.usage.prompt + this.usage.completion
+      }
+    };
+  }
+}
+
 class SlowProvider implements ProviderAdapter {
   readonly kind = "slow";
   attempts = 0;

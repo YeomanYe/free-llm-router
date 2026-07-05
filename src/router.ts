@@ -9,7 +9,8 @@ import {
   type ModelTier,
   type ProviderAdapter,
   type RetryPolicy,
-  type RouterOptions
+  type RouterOptions,
+  type UsageStats
 } from "./types.js";
 
 interface Candidate {
@@ -56,6 +57,10 @@ export class ModelRouter {
   private readonly freeOnly: boolean;
 
   private catalogCache?: Candidate[];
+
+  private readonly usageByProvider = new Map<string, UsageStats>();
+
+  private readonly usageByModel = new Map<string, UsageStats>();
 
   constructor(options: RouterOptions) {
     this.providers = options.providers;
@@ -129,9 +134,12 @@ export class ModelRouter {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retry.maxRetries; attempt += 1) {
       try {
-        return await candidate.provider.chat({ ...request, model: candidate.model.id });
+        const response = await candidate.provider.chat({ ...request, model: candidate.model.id });
+        this.recordSuccess(candidate.provider.name, candidate.model.id, response);
+        return response;
       } catch (error) {
         lastError = error;
+        this.recordError(candidate.provider.name, candidate.model.id);
         if (!isRetryableError(error)) break;
         if (attempt < this.retry.maxRetries) {
           await sleep(this.retry.baseDelayMs * attempt);
@@ -139,6 +147,58 @@ export class ModelRouter {
       }
     }
     throw lastError instanceof Error ? lastError : new Error("chat failed");
+  }
+
+  getUsage(options?: { by?: "provider" | "model" }): Record<string, UsageStats> {
+    const map = options?.by === "model" ? this.usageByModel : this.usageByProvider;
+    const out: Record<string, UsageStats> = {};
+    for (const [key, value] of map) out[key] = { ...value };
+    return out;
+  }
+
+  resetUsage(): void {
+    this.usageByProvider.clear();
+    this.usageByModel.clear();
+  }
+
+  private recordSuccess(providerName: string, modelId: string, response: ChatResponse): void {
+    const providerStats = this.getOrInitUsage(this.usageByProvider, providerName);
+    const modelStats = this.getOrInitUsage(this.usageByModel, `${providerName}/${modelId}`);
+    for (const stats of [providerStats, modelStats]) {
+      stats.requests += 1;
+      stats.successes += 1;
+      if (response.usage) {
+        stats.promptTokens += response.usage.promptTokens ?? 0;
+        stats.completionTokens += response.usage.completionTokens ?? 0;
+        stats.totalTokens += response.usage.totalTokens ?? 0;
+      }
+    }
+  }
+
+  private recordError(providerName: string, modelId: string): void {
+    for (const [map, key] of [
+      [this.usageByProvider, providerName],
+      [this.usageByModel, `${providerName}/${modelId}`]
+    ] as const) {
+      const stats = this.getOrInitUsage(map, key);
+      stats.requests += 1;
+      stats.errors += 1;
+    }
+  }
+
+  private getOrInitUsage(map: Map<string, UsageStats>, key: string): UsageStats {
+    const existing = map.get(key);
+    if (existing) return existing;
+    const created: UsageStats = {
+      requests: 0,
+      successes: 0,
+      errors: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0
+    };
+    map.set(key, created);
+    return created;
   }
 
   private async selectCandidates(request: ChatRequest): Promise<Candidate[]> {

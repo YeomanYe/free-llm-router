@@ -5,8 +5,8 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { createRouterFromConfig } from "./config.js";
-import { pickBestModelPerProvider } from "./router.js";
-import { MODEL_TIERS, type ChatMessage, type ModelTier } from "./types.js";
+import { pickBestModelPerProvider, type ModelRouter } from "./router.js";
+import { MODEL_TIERS, type ChatMessage, type ModelTier, type UsageStats } from "./types.js";
 
 interface CommonOptions {
   config?: string;
@@ -56,6 +56,8 @@ async function runChat(argv: string[]): Promise<void> {
       models: { type: "string" },
       providers: { type: "string" },
       "fallback-to-rest": { type: "boolean" },
+      stats: { type: "boolean" },
+      "stats-by": { type: "string" },
       "max-tokens": { type: "string" },
       temperature: { type: "string" },
       system: { type: "string" }
@@ -91,6 +93,7 @@ async function runChat(argv: string[]): Promise<void> {
 
   console.log(response.content);
   console.error(`\n(via ${response.provider}/${response.model})`);
+  if (values.stats) printUsage(router, values["stats-by"]);
 }
 
 async function runRace(argv: string[]): Promise<void> {
@@ -107,6 +110,8 @@ async function runRace(argv: string[]): Promise<void> {
       models: { type: "string" },
       providers: { type: "string" },
       "fallback-to-rest": { type: "boolean" },
+      stats: { type: "boolean" },
+      "stats-by": { type: "string" },
       "per-provider": { type: "boolean" },
       "max-tokens": { type: "string" },
       temperature: { type: "string" },
@@ -147,6 +152,7 @@ async function runRace(argv: string[]): Promise<void> {
 
   console.log(response.content);
   console.error(`\n(via ${response.provider}/${response.model} in ${Date.now() - started}ms)`);
+  if (values.stats) printUsage(router, values["stats-by"]);
 }
 
 async function runModels(argv: string[]): Promise<void> {
@@ -207,7 +213,8 @@ async function runBroadcast(argv: string[]): Promise<void> {
       "max-tokens": { type: "string" },
       timeout: { type: "string" },
       tier: { type: "string" },
-      "per-provider": { type: "boolean" }
+      "per-provider": { type: "boolean" },
+      "stats-by": { type: "string" }
     }
   });
 
@@ -274,6 +281,7 @@ async function runBroadcast(argv: string[]): Promise<void> {
 
   const okCount = results.filter((r) => r.ok).length;
   console.log(`Done: ${okCount}/${results.length} ok`);
+  printUsage(router, values["stats-by"]);
 }
 
 async function bootstrap(options: CommonOptions) {
@@ -344,6 +352,25 @@ function loadEnvFile(path: string): void {
     const key = trimmed.slice(0, eq).trim();
     const value = trimmed.slice(eq + 1).trim();
     if (!(key in process.env)) process.env[key] = value;
+  }
+}
+
+function printUsage(router: ModelRouter, byOption: string | undefined): void {
+  const by = byOption === "model" ? "model" : "provider";
+  const usage = router.getUsage({ by });
+  const entries = Object.entries(usage);
+  if (entries.length === 0) {
+    console.log(`\n[usage] no calls recorded`);
+    return;
+  }
+  entries.sort((a, b) => b[1].totalTokens - a[1].totalTokens);
+  console.log(`\n[usage] by ${by}`);
+  const rows: Array<[string, UsageStats]> = entries;
+  for (const [key, s] of rows) {
+    console.log(
+      `  ${key.padEnd(48)}  req=${s.requests} ok=${s.successes} err=${s.errors}  ` +
+        `tokens=${s.totalTokens} (prompt=${s.promptTokens} out=${s.completionTokens})`
+    );
   }
 }
 
@@ -420,6 +447,12 @@ broadcast flags:
   --per-provider        Print one response per provider (top-qualityScore pick)
   --max-tokens <n>      Per-call cap (default 200)
   --timeout <ms>        Per-call timeout in ms (default 60000)
+  --stats-by <p|m>      Aggregate the usage table by "provider" (default) or "model"
+
+Usage tracking:
+  Every command tallies per-provider/per-model requests, successes, errors,
+  and token usage in memory. chat/race print the table when --stats is passed;
+  broadcast prints it automatically at the end.
 `);
 }
 

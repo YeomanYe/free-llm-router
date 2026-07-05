@@ -18,5 +18,6 @@ export type {
   ModelCapabilities,
   ModelTier,
   ProviderAdapter,
-  RouterOptions
+  RouterOptions,
+  UsageStats
 } from "./types.js";

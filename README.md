@@ -59,6 +59,16 @@ const fastest = await router.chatRace({ tier: "medium-1", messages });
 const compared = await router.chatAll({ tier: "medium-1", messages });
 ```
 
+Every call is tallied into an in-memory usage counter:
+
+```ts
+router.getUsage();                    // { [providerName]: UsageStats }
+router.getUsage({ by: "model" });     // { [`${provider}/${modelId}`]: UsageStats }
+router.resetUsage();                  // clear the counters
+```
+
+`UsageStats` tracks `requests`, `successes`, `errors`, `promptTokens`, `completionTokens`, `totalTokens`. Every provider HTTP attempt (including retries) increments `requests`, so the number aligns with what the provider bills.
+
 ## CLI
 
 The package installs a `flr` binary. Point it at a config and (optionally) an env file:
@@ -85,6 +95,10 @@ flr race --providers "bigmodel,cloudflare" "..."
 # Fan-out to one model per provider (top qualityScore) instead of every model
 flr broadcast --per-provider --tier medium-1 "..."
 flr race --per-provider "..."
+
+# Usage report at end (broadcast always prints, chat/race opt-in via --stats)
+flr chat --stats --model bigmodel/glm-4-flash "..."
+flr broadcast --stats-by model "..."     # switch aggregation to per-model
 
 # Enumerate every callable model, grouped by provider
 flr models
