@@ -80,4 +80,44 @@ describe("ModelRouter", () => {
     expect(first.attempts).toBe(3);
     expect(second.attempts).toBe(1);
   });
+
+  it("walks the explicit models list in order regardless of config order", async () => {
+    const alpha = new FakeProvider("alpha", "always-fail");
+    const beta = new FakeProvider("beta", "always-fail");
+    const gamma = new FakeProvider("gamma", "succeed");
+    const router = new ModelRouter({
+      providers: [gamma, alpha, beta],
+      retry: { maxRetries: 0, baseDelayMs: 0 }
+    });
+
+    const response = await router.chat({
+      messages: [{ role: "user", content: "hi" }],
+      models: ["alpha/model", "beta/model", "gamma/model"]
+    });
+
+    expect(response.provider).toBe("gamma");
+    expect(alpha.attempts).toBe(1);
+    expect(beta.attempts).toBe(1);
+    expect(gamma.attempts).toBe(1);
+  });
+
+  it("restricts and orders candidates by the providers list", async () => {
+    const alpha = new FakeProvider("alpha", "succeed");
+    const beta = new FakeProvider("beta", "succeed");
+    const gamma = new FakeProvider("gamma", "succeed");
+    const router = new ModelRouter({
+      providers: [alpha, beta, gamma],
+      retry: { maxRetries: 0, baseDelayMs: 0 }
+    });
+
+    const response = await router.chat({
+      messages: [{ role: "user", content: "hi" }],
+      providers: ["gamma", "beta"]
+    });
+
+    expect(response.provider).toBe("gamma");
+    expect(alpha.attempts).toBe(0);
+    expect(beta.attempts).toBe(0);
+    expect(gamma.attempts).toBe(1);
+  });
 });

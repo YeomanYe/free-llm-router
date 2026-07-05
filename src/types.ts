@@ -31,6 +31,8 @@ export interface ChatMessage {
 
 export interface ChatRequest {
   model?: string;
+  models?: string[];
+  providers?: string[];
   tier?: ModelTier;
   messages: ChatMessage[];
   temperature?: number;

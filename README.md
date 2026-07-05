@@ -61,6 +61,10 @@ flr chat --config router.config.example.json --env-file ~/.env "Explain routers 
 flr chat --tier medium-1 "..."
 flr chat --model bigmodel/glm-4.5-flash "..."
 
+# Ordered sequences: walk the list, first success wins
+flr chat --models "bigmodel/glm-4-flash,cloudflare/@cf/openai/gpt-oss-20b" "..."
+flr chat --providers "bigmodel,cloudflare,openrouter" --tier medium-1 "..."
+
 # Enumerate every callable model, grouped by provider
 flr models
 flr models --json

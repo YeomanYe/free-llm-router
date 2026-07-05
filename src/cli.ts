@@ -49,6 +49,8 @@ async function runChat(argv: string[]): Promise<void> {
       "no-free-only": { type: "boolean" },
       tier: { type: "string" },
       model: { type: "string" },
+      models: { type: "string" },
+      providers: { type: "string" },
       "max-tokens": { type: "string" },
       temperature: { type: "string" },
       system: { type: "string" }
@@ -75,6 +77,8 @@ async function runChat(argv: string[]): Promise<void> {
     messages,
     tier: coerceTier(values.tier),
     model: values.model,
+    models: splitList(values.models),
+    providers: splitList(values.providers),
     maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
     temperature: values.temperature ? Number(values.temperature) : undefined
   });
@@ -279,6 +283,12 @@ function loadEnvFile(path: string): void {
   }
 }
 
+function splitList(value: string | undefined): string[] | undefined {
+  if (!value) return undefined;
+  const items = value.split(",").map((s) => s.trim()).filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
 function coerceTier(value: string | undefined): ModelTier | undefined {
   if (!value) return undefined;
   if (!(MODEL_TIERS as readonly string[]).includes(value)) {
@@ -325,6 +335,8 @@ Common flags:
 chat flags:
   --tier <t>            Force a tier, e.g. high-1, medium-2, low-3
   --model <name>        Force a specific model (e.g. openrouter/openai/gpt-oss-20b)
+  --models <a,b,c>      Try each in order, first success wins (comma separated)
+  --providers <a,b,c>   Restrict + order providers (combines with --tier)
   --system <text>       Prepend a system message
   --max-tokens <n>      Response cap
   --temperature <n>     Sampling temperature

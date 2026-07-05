@@ -82,21 +82,27 @@ export class ModelRouter {
   private async selectCandidates(request: ChatRequest): Promise<Candidate[]> {
     const candidates = await this.getCandidates(false);
 
-    if (request.model) {
-      return candidates.filter(
-        (candidate) =>
-          candidate.model.id === request.model ||
-          `${candidate.provider.name}/${candidate.model.id}` === request.model
-      );
+    if (request.models && request.models.length > 0) {
+      return orderedMatch(candidates, request.models);
     }
 
-    return candidates.filter((candidate) => {
+    if (request.model) {
+      return matchModel(candidates, request.model);
+    }
+
+    let filtered = candidates.filter((candidate) => {
       if (request.tier && candidate.model.tier !== request.tier) {
         return false;
       }
 
       return this.fallbackTiers.includes(candidate.model.tier ?? "low-3");
     });
+
+    if (request.providers && request.providers.length > 0) {
+      filtered = orderByProviders(filtered, request.providers);
+    }
+
+    return filtered;
   }
 
   private async getCandidates(refresh: boolean): Promise<Candidate[]> {
@@ -132,4 +138,35 @@ function sleep(ms: number): Promise<void> {
   }
 
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function matchModel(candidates: Candidate[], target: string): Candidate[] {
+  return candidates.filter(
+    (candidate) =>
+      candidate.model.id === target ||
+      `${candidate.provider.name}/${candidate.model.id}` === target
+  );
+}
+
+// Preserves the caller's order and drops entries that match no candidate,
+// so `models: ["a", "b", "c"]` tries a, then b, then c even if a comes last in config.
+function orderedMatch(candidates: Candidate[], targets: string[]): Candidate[] {
+  const seen = new Set<Candidate>();
+  const ordered: Candidate[] = [];
+  for (const target of targets) {
+    for (const candidate of matchModel(candidates, target)) {
+      if (!seen.has(candidate)) {
+        seen.add(candidate);
+        ordered.push(candidate);
+      }
+    }
+  }
+  return ordered;
+}
+
+function orderByProviders(candidates: Candidate[], providers: string[]): Candidate[] {
+  const rank = new Map(providers.map((name, index) => [name, index]));
+  return candidates
+    .filter((candidate) => rank.has(candidate.provider.name))
+    .sort((a, b) => rank.get(a.provider.name)! - rank.get(b.provider.name)!);
 }
