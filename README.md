@@ -100,6 +100,13 @@ flr race --per-provider "..."
 flr chat --stats --model bigmodel/glm-4-flash "..."
 flr broadcast --stats-by model "..."     # switch aggregation to per-model
 
+# Multi-dimensional model selection
+flr chat --min-quality 0.7 --min-ctx 128000 "..."
+flr chat --sort-by quality --fallback-to-rest "..."
+flr chat --max-latency 2000 "..."                  # uses observed avg from usage
+flr chat --max-input-cost 0.3 --sort-by cost "..." # $/million input tokens
+flr chat --include-cooling "..."                   # opt back in to models under 60s cooldown
+
 # Enumerate every callable model, grouped by provider
 flr models
 flr models --json

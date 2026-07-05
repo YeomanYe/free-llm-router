@@ -29,6 +29,8 @@ export interface ChatMessage {
   name?: string;
 }
 
+export type SortDimension = "quality" | "context" | "speed" | "cost";
+
 export interface ChatRequest {
   model?: string;
   models?: string[];
@@ -38,6 +40,13 @@ export interface ChatRequest {
   // instead of hard-failing when the whole list errors out.
   fallbackToRest?: boolean;
   tier?: ModelTier;
+  minQuality?: number;
+  minContextWindow?: number;
+  maxLatencyMs?: number;
+  maxInputCostPerMillion?: number;
+  // Default true — models under cooldown (recent 429/5xx) are dropped.
+  excludeCooling?: boolean;
+  sortBy?: SortDimension;
   messages: ChatMessage[];
   temperature?: number;
   maxTokens?: number;
@@ -68,7 +77,9 @@ export interface ChatAllResult {
 
 // Rolling counters kept per provider (or provider/model when queried in that mode).
 // Requests counts every provider.chat() attempt including retries, so it aligns
-// with what the provider actually bills.
+// with what the provider actually bills. Latency is a simple running average
+// over successful calls only; cooldownUntil is set when the provider throws a
+// retryable error (rate limits, 5xx) and cleared on the next successful call.
 export interface UsageStats {
   requests: number;
   successes: number;
@@ -76,6 +87,9 @@ export interface UsageStats {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  avgLatencyMs: number;
+  lastLatencyMs: number;
+  cooldownUntil?: number;
 }
 
 export interface ModelCapabilities {
@@ -136,4 +150,5 @@ export interface RouterOptions {
   retry?: Partial<RetryPolicy>;
   fallback?: Partial<FallbackPolicy>;
   freeOnly?: boolean;
+  cooldownMs?: number;
 }

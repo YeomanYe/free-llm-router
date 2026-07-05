@@ -162,6 +162,67 @@ describe("ModelRouter", () => {
     expect(backup.attempts).toBe(0);
   });
 
+  it("filters candidates by minQuality and minContextWindow before dispatching", async () => {
+    const heavy = new MultiModelProvider("heavy", [
+      { id: "heavy/big", qualityScore: 0.9, contextWindow: 128_000 },
+      { id: "heavy/small", qualityScore: 0.4, contextWindow: 8_000 }
+    ]);
+    const solo = new MultiModelProvider("solo", [
+      { id: "solo/tiny", qualityScore: 0.6, contextWindow: 4_000 }
+    ]);
+    const router = new ModelRouter({
+      providers: [heavy, solo],
+      retry: { maxRetries: 0, baseDelayMs: 0 }
+    });
+
+    const results = await router.chatAll({
+      messages: [{ role: "user", content: "hi" }],
+      minQuality: 0.5,
+      minContextWindow: 32_000
+    });
+    expect(results.map((r) => r.model)).toEqual(["heavy/big"]);
+  });
+
+  it("sortBy quality reorders the fallback pool from best to worst", async () => {
+    const provider = new MultiModelProvider("p", [
+      { id: "p/mid", qualityScore: 0.6 },
+      { id: "p/top", qualityScore: 0.9 },
+      { id: "p/low", qualityScore: 0.3 }
+    ]);
+    const router = new ModelRouter({
+      providers: [provider],
+      retry: { maxRetries: 0, baseDelayMs: 0 }
+    });
+
+    const results = await router.chatAll({
+      messages: [{ role: "user", content: "hi" }],
+      sortBy: "quality"
+    });
+    expect(results.map((r) => r.model)).toEqual(["p/top", "p/mid", "p/low"]);
+  });
+
+  it("excludes cooling models by default and includes them when opted-in", async () => {
+    const flaky = new UsageProvider("flaky", { prompt: 1, completion: 1 }, { failFirst: 5 });
+    const router = new ModelRouter({
+      providers: [flaky],
+      retry: { maxRetries: 0, baseDelayMs: 0 },
+      cooldownMs: 60_000
+    });
+
+    await expect(
+      router.chat({ messages: [{ role: "user", content: "hi" }] })
+    ).rejects.toThrow();
+
+    await expect(
+      router.chat({ messages: [{ role: "user", content: "hi" }] })
+    ).rejects.toThrow(/No available model/);
+
+    // Bypass cooldown filter so the retry actually goes out.
+    await expect(
+      router.chat({ messages: [{ role: "user", content: "hi" }], excludeCooling: false })
+    ).rejects.toThrow(/flaky/);
+  });
+
   it("chatRace returns the first successful response and hits every candidate", async () => {
     const slow = new SlowProvider("slow", 40);
     const fast = new SlowProvider("fast", 5);
@@ -236,7 +297,7 @@ class MultiModelProvider implements ProviderAdapter {
   attemptedIds: string[] = [];
   constructor(
     readonly name: string,
-    private readonly models: Array<{ id: string; qualityScore?: number }>
+    private readonly models: Array<{ id: string; qualityScore?: number; contextWindow?: number }>
   ) {}
   async listModels(): Promise<DiscoveredModel[]> {
     return this.models.map((m) => ({
@@ -246,7 +307,8 @@ class MultiModelProvider implements ProviderAdapter {
       free: true,
       source: "static",
       capabilities: { chat: true },
-      qualityScore: m.qualityScore
+      qualityScore: m.qualityScore,
+      contextWindow: m.contextWindow
     }));
   }
   async chat(request: ChatRequest & { model: string }): Promise<ChatResponse> {
@@ -275,7 +337,7 @@ describe("ModelRouter usage tracking", () => {
     await router.chat({ messages: [{ role: "user", content: "hi" }], model: "beta/model" });
 
     const byProvider = router.getUsage();
-    expect(byProvider.alpha).toEqual({
+    expect(byProvider.alpha).toMatchObject({
       requests: 2,
       successes: 2,
       errors: 0,

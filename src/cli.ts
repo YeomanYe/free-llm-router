@@ -6,7 +6,29 @@ import { parseArgs } from "node:util";
 
 import { createRouterFromConfig } from "./config.js";
 import { pickBestModelPerProvider, type ModelRouter } from "./router.js";
-import { MODEL_TIERS, type ChatMessage, type ModelTier, type UsageStats } from "./types.js";
+import {
+  MODEL_TIERS,
+  type ChatMessage,
+  type ChatRequest,
+  type DiscoveredModel,
+  type ModelTier,
+  type SortDimension,
+  type UsageStats
+} from "./types.js";
+
+function modelDimensionScore(model: DiscoveredModel, dim: SortDimension): number {
+  switch (dim) {
+    case "quality":
+      return model.qualityScore ?? 0;
+    case "context":
+      return model.contextWindow ?? 0;
+    case "cost":
+      return model.pricing?.inputPerMillion !== undefined ? -model.pricing.inputPerMillion : 0;
+    case "speed":
+      // No per-model latency in the pre-broadcast catalog; fall through to 0.
+      return 0;
+  }
+}
 
 interface CommonOptions {
   config?: string;
@@ -56,6 +78,12 @@ async function runChat(argv: string[]): Promise<void> {
       models: { type: "string" },
       providers: { type: "string" },
       "fallback-to-rest": { type: "boolean" },
+      "min-quality": { type: "string" },
+      "min-ctx": { type: "string" },
+      "max-latency": { type: "string" },
+      "max-input-cost": { type: "string" },
+      "include-cooling": { type: "boolean" },
+      "sort-by": { type: "string" },
       stats: { type: "boolean" },
       "stats-by": { type: "string" },
       "max-tokens": { type: "string" },
@@ -87,6 +115,7 @@ async function runChat(argv: string[]): Promise<void> {
     models: splitList(values.models),
     providers: splitList(values.providers),
     fallbackToRest: values["fallback-to-rest"],
+    ...dimensionFilters(values),
     maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
     temperature: values.temperature ? Number(values.temperature) : undefined
   });
@@ -110,6 +139,12 @@ async function runRace(argv: string[]): Promise<void> {
       models: { type: "string" },
       providers: { type: "string" },
       "fallback-to-rest": { type: "boolean" },
+      "min-quality": { type: "string" },
+      "min-ctx": { type: "string" },
+      "max-latency": { type: "string" },
+      "max-input-cost": { type: "string" },
+      "include-cooling": { type: "boolean" },
+      "sort-by": { type: "string" },
       stats: { type: "boolean" },
       "stats-by": { type: "string" },
       "per-provider": { type: "boolean" },
@@ -144,6 +179,7 @@ async function runRace(argv: string[]): Promise<void> {
       models: splitList(values.models),
       providers: splitList(values.providers),
       fallbackToRest: values["fallback-to-rest"],
+      ...dimensionFilters(values),
       maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
       temperature: values.temperature ? Number(values.temperature) : undefined
     },
@@ -214,6 +250,10 @@ async function runBroadcast(argv: string[]): Promise<void> {
       timeout: { type: "string" },
       tier: { type: "string" },
       "per-provider": { type: "boolean" },
+      "min-quality": { type: "string" },
+      "min-ctx": { type: "string" },
+      "max-input-cost": { type: "string" },
+      "sort-by": { type: "string" },
       "stats-by": { type: "string" }
     }
   });
@@ -235,7 +275,22 @@ async function runBroadcast(argv: string[]): Promise<void> {
 
   const allModels = await router.listModels();
   const tier = coerceTier(values.tier);
-  const filtered = tier ? allModels.filter((m) => m.tier === tier) : allModels;
+  const minQuality = values["min-quality"] ? Number(values["min-quality"]) : undefined;
+  const minCtx = values["min-ctx"] ? Number(values["min-ctx"]) : undefined;
+  const maxCost = values["max-input-cost"] ? Number(values["max-input-cost"]) : undefined;
+  const sortBy = typeof values["sort-by"] === "string" ? values["sort-by"] : undefined;
+
+  let filtered = tier ? allModels.filter((m) => m.tier === tier) : allModels;
+  if (minQuality !== undefined) filtered = filtered.filter((m) => (m.qualityScore ?? 0) >= minQuality);
+  if (minCtx !== undefined) filtered = filtered.filter((m) => (m.contextWindow ?? 0) >= minCtx);
+  if (maxCost !== undefined) filtered = filtered.filter((m) => (m.pricing?.inputPerMillion ?? 0) <= maxCost);
+  if (sortBy) {
+    if (!(SORT_DIMENSIONS as readonly string[]).includes(sortBy)) {
+      console.error(`Invalid --sort-by "${sortBy}". Expected one of: ${SORT_DIMENSIONS.join(", ")}`);
+      process.exit(1);
+    }
+    filtered = [...filtered].sort((a, b) => modelDimensionScore(b, sortBy as SortDimension) - modelDimensionScore(a, sortBy as SortDimension));
+  }
   const models = values["per-provider"] ? pickBestModelPerProvider(filtered) : filtered;
 
   if (models.length === 0) {
@@ -374,6 +429,31 @@ function printUsage(router: ModelRouter, byOption: string | undefined): void {
   }
 }
 
+const SORT_DIMENSIONS: readonly SortDimension[] = ["quality", "context", "speed", "cost"];
+
+function dimensionFilters(values: Record<string, unknown>): Partial<ChatRequest> {
+  const out: Partial<ChatRequest> = {};
+  const q = values["min-quality"];
+  const c = values["min-ctx"];
+  const l = values["max-latency"];
+  const cost = values["max-input-cost"];
+  const sort = values["sort-by"];
+  const cooling = values["include-cooling"];
+  if (typeof q === "string") out.minQuality = Number(q);
+  if (typeof c === "string") out.minContextWindow = Number(c);
+  if (typeof l === "string") out.maxLatencyMs = Number(l);
+  if (typeof cost === "string") out.maxInputCostPerMillion = Number(cost);
+  if (typeof sort === "string") {
+    if (!(SORT_DIMENSIONS as readonly string[]).includes(sort)) {
+      console.error(`Invalid --sort-by "${sort}". Expected one of: ${SORT_DIMENSIONS.join(", ")}`);
+      process.exit(1);
+    }
+    out.sortBy = sort as SortDimension;
+  }
+  if (cooling === true) out.excludeCooling = false;
+  return out;
+}
+
 function splitList(value: string | undefined): string[] | undefined {
   if (!value) return undefined;
   const items = value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -431,6 +511,12 @@ chat flags:
   --providers <a,b,c>   Restrict + order providers (combines with --tier)
   --fallback-to-rest    Treat --model/--models/--providers as preferred prefix,
                         fall through to the remaining tier-filtered pool
+  --min-quality <0-1>   Drop models whose qualityScore is below this
+  --min-ctx <tokens>    Drop models whose contextWindow is below this
+  --max-latency <ms>    Drop models whose observed avg latency exceeds this
+  --max-input-cost <$>  Drop models whose input price/M tokens exceeds this
+  --sort-by <dim>       Sort by "quality" | "context" | "speed" | "cost"
+  --include-cooling     Include models under cooldown (recent 429/5xx)
   --system <text>       Prepend a system message
   --max-tokens <n>      Response cap
   --temperature <n>     Sampling temperature

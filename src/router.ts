@@ -10,6 +10,7 @@ import {
   type ProviderAdapter,
   type RetryPolicy,
   type RouterOptions,
+  type SortDimension,
   type UsageStats
 } from "./types.js";
 
@@ -62,6 +63,8 @@ export class ModelRouter {
 
   private readonly usageByModel = new Map<string, UsageStats>();
 
+  private readonly cooldownMs: number;
+
   constructor(options: RouterOptions) {
     this.providers = options.providers;
     this.retry = {
@@ -70,6 +73,7 @@ export class ModelRouter {
     };
     this.fallbackTiers = options.fallback?.tiers ?? [...MODEL_TIERS];
     this.freeOnly = options.freeOnly ?? true;
+    this.cooldownMs = options.cooldownMs ?? 60_000;
   }
 
   async listModels(options: { refresh?: boolean } = {}): Promise<DiscoveredModel[]> {
@@ -133,13 +137,14 @@ export class ModelRouter {
   private async callWithRetry(candidate: Candidate, request: ChatRequest): Promise<ChatResponse> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retry.maxRetries; attempt += 1) {
+      const started = Date.now();
       try {
         const response = await candidate.provider.chat({ ...request, model: candidate.model.id });
-        this.recordSuccess(candidate.provider.name, candidate.model.id, response);
+        this.recordSuccess(candidate.provider.name, candidate.model.id, response, Date.now() - started);
         return response;
       } catch (error) {
         lastError = error;
-        this.recordError(candidate.provider.name, candidate.model.id);
+        this.recordError(candidate.provider.name, candidate.model.id, isRetryableError(error));
         if (!isRetryableError(error)) break;
         if (attempt < this.retry.maxRetries) {
           await sleep(this.retry.baseDelayMs * attempt);
@@ -161,12 +166,23 @@ export class ModelRouter {
     this.usageByModel.clear();
   }
 
-  private recordSuccess(providerName: string, modelId: string, response: ChatResponse): void {
+  private recordSuccess(
+    providerName: string,
+    modelId: string,
+    response: ChatResponse,
+    latencyMs: number
+  ): void {
     const providerStats = this.getOrInitUsage(this.usageByProvider, providerName);
     const modelStats = this.getOrInitUsage(this.usageByModel, `${providerName}/${modelId}`);
     for (const stats of [providerStats, modelStats]) {
       stats.requests += 1;
       stats.successes += 1;
+      stats.lastLatencyMs = latencyMs;
+      stats.avgLatencyMs =
+        stats.successes === 1
+          ? latencyMs
+          : stats.avgLatencyMs + (latencyMs - stats.avgLatencyMs) / stats.successes;
+      stats.cooldownUntil = undefined;
       if (response.usage) {
         stats.promptTokens += response.usage.promptTokens ?? 0;
         stats.completionTokens += response.usage.completionTokens ?? 0;
@@ -175,7 +191,7 @@ export class ModelRouter {
     }
   }
 
-  private recordError(providerName: string, modelId: string): void {
+  private recordError(providerName: string, modelId: string, retryable: boolean): void {
     for (const [map, key] of [
       [this.usageByProvider, providerName],
       [this.usageByModel, `${providerName}/${modelId}`]
@@ -183,6 +199,9 @@ export class ModelRouter {
       const stats = this.getOrInitUsage(map, key);
       stats.requests += 1;
       stats.errors += 1;
+      if (retryable) {
+        stats.cooldownUntil = Date.now() + this.cooldownMs;
+      }
     }
   }
 
@@ -195,7 +214,9 @@ export class ModelRouter {
       errors: 0,
       promptTokens: 0,
       completionTokens: 0,
-      totalTokens: 0
+      totalTokens: 0,
+      avgLatencyMs: 0,
+      lastLatencyMs: 0
     };
     map.set(key, created);
     return created;
@@ -204,11 +225,10 @@ export class ModelRouter {
   private async selectCandidates(request: ChatRequest): Promise<Candidate[]> {
     const candidates = await this.getCandidates(false);
     const tiered = candidates.filter((candidate) => {
-      if (request.tier && candidate.model.tier !== request.tier) {
-        return false;
-      }
+      if (request.tier && candidate.model.tier !== request.tier) return false;
       return this.fallbackTiers.includes(candidate.model.tier ?? "low-3");
     });
+    const filteredTier = this.applyDimensionFilters(tiered, request);
 
     let head: Candidate[] | undefined;
     if (request.models && request.models.length > 0) {
@@ -216,15 +236,73 @@ export class ModelRouter {
     } else if (request.model) {
       head = matchModel(candidates, request.model);
     } else if (request.providers && request.providers.length > 0) {
-      head = orderByProviders(tiered, request.providers);
+      head = orderByProviders(filteredTier, request.providers);
     }
 
-    if (head === undefined) return tiered;
+    if (head === undefined) return this.sort(filteredTier, request.sortBy);
     if (!request.fallbackToRest) return head;
 
     const seen = new Set(head);
-    const tail = tiered.filter((c) => !seen.has(c));
+    const tail = this.sort(filteredTier.filter((c) => !seen.has(c)), request.sortBy);
     return [...head, ...tail];
+  }
+
+  private applyDimensionFilters(candidates: Candidate[], request: ChatRequest): Candidate[] {
+    const excludeCooling = request.excludeCooling ?? true;
+    const now = Date.now();
+    return candidates.filter((c) => {
+      const model = c.model;
+      if (request.minQuality !== undefined && (model.qualityScore ?? 0) < request.minQuality) {
+        return false;
+      }
+      if (
+        request.minContextWindow !== undefined &&
+        (model.contextWindow ?? 0) < request.minContextWindow
+      ) {
+        return false;
+      }
+      if (
+        request.maxInputCostPerMillion !== undefined &&
+        (model.pricing?.inputPerMillion ?? 0) > request.maxInputCostPerMillion
+      ) {
+        return false;
+      }
+      const stats = this.usageByModel.get(`${c.provider.name}/${model.id}`);
+      if (request.maxLatencyMs !== undefined) {
+        const observed = stats?.avgLatencyMs ?? 0;
+        // Never-called models pass the latency filter — no observation to reject on.
+        if (observed > 0 && observed > request.maxLatencyMs) return false;
+      }
+      if (excludeCooling && stats?.cooldownUntil && stats.cooldownUntil > now) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  private sort(candidates: Candidate[], dim: SortDimension | undefined): Candidate[] {
+    if (!dim) return candidates;
+    const scored = candidates.map((c) => ({ c, score: this.dimensionScore(c, dim) }));
+    scored.sort((a, b) => b.score - a.score);
+    return scored.map((s) => s.c);
+  }
+
+  private dimensionScore(candidate: Candidate, dim: SortDimension): number {
+    switch (dim) {
+      case "quality":
+        return candidate.model.qualityScore ?? 0;
+      case "context":
+        return candidate.model.contextWindow ?? 0;
+      case "speed": {
+        const stats = this.usageByModel.get(`${candidate.provider.name}/${candidate.model.id}`);
+        const latency = stats?.avgLatencyMs;
+        return latency && latency > 0 ? -latency : 0;
+      }
+      case "cost": {
+        const cost = candidate.model.pricing?.inputPerMillion;
+        return cost !== undefined ? -cost : 0;
+      }
+    }
   }
 
   private async getCandidates(refresh: boolean): Promise<Candidate[]> {
