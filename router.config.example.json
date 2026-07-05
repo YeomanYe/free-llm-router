@@ -125,7 +125,7 @@
       "staticModels": [
         {
           "id": "openai/gpt-4o-mini",
-          "free": true,
+          "free": false,
           "contextWindow": 128000,
           "qualityScore": 0.74
         }
@@ -139,7 +139,7 @@
       "staticModels": [
         {
           "id": "meta/llama-3.1-70b-instruct",
-          "free": true,
+          "free": false,
           "contextWindow": 131072,
           "qualityScore": 0.78
         }
@@ -153,7 +153,7 @@
       "staticModels": [
         {
           "id": "openai/gpt-4o-mini",
-          "free": true,
+          "free": false,
           "contextWindow": 128000,
           "qualityScore": 0.74
         }
