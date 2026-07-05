@@ -129,6 +129,16 @@ Set once, use everywhere. The CLI walks these sources top-down and keeps the fir
 
 Once either 3 or 4 is set up, `flr chat "..."` works without any extra flags.
 
+### Quota / free-tier availability
+
+```bash
+flr quota                # per-provider balance + free-tier policy
+flr quota --probe        # + send a 1-token chat to detect ok / 429 / 403 right now
+flr quota --json         # machine-readable output
+```
+
+The command probes two provider APIs directly (OpenRouter `/auth/key`, Vercel AI Gateway `/credits`) and reports every other provider from a hard-coded free-tier policy table (Groq, Gemini, Cerebras, BigModel, NVIDIA, Cloudflare, etc). With `--probe` it also sends one `max_tokens: 1` call to each provider's first `free: true` static model to distinguish "policy says it's free" from "actually callable right now".
+
 ## Provider Notes
 
 OpenAI-compatible providers use:

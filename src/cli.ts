@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 
 import { createRouterFromConfig } from "./config.js";
 import { pickBestModelPerProvider, type ModelRouter } from "./router.js";
+import { probeQuota, type ProviderQuotaResult } from "./quota.js";
 import {
   MODEL_TIERS,
   type ChatMessage,
@@ -57,6 +58,9 @@ async function main(): Promise<void> {
       return;
     case "broadcast":
       await runBroadcast(rest);
+      return;
+    case "quota":
+      await runQuota(rest);
       return;
     default:
       console.error(`Unknown command: ${command}`);
@@ -340,6 +344,126 @@ async function runBroadcast(argv: string[]): Promise<void> {
   printUsage(router, values["stats-by"]);
 }
 
+async function runQuota(argv: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args: argv,
+    allowPositionals: false,
+    options: {
+      config: { type: "string" },
+      "env-file": { type: "string", multiple: true },
+      probe: { type: "boolean" },
+      json: { type: "boolean" }
+    }
+  });
+
+  loadDefaultEnvFiles(values["env-file"] ?? []);
+  const configPath = resolveConfigPath(values.config);
+  const rawConfig = JSON.parse(readFileSync(configPath, "utf8")) as {
+    providers?: Array<Record<string, any>>;
+  };
+
+  const results = (
+    await Promise.all(
+      (rawConfig.providers ?? []).flatMap((provider) =>
+        expandProviderKeys(provider).map((expanded) =>
+          probeProviderQuota(expanded, Boolean(values.probe))
+        )
+      )
+    )
+  ).flat();
+
+  if (values.json) {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+
+  for (const r of results) printQuotaRow(r);
+  const totalRemaining = results
+    .map((r) => r.remainingUsd ?? 0)
+    .filter((v) => Number.isFinite(v))
+    .reduce((sum, v) => sum + v, 0);
+  if (totalRemaining > 0) {
+    console.log(`\nTotal queryable balance remaining: $${totalRemaining.toFixed(2)}`);
+  }
+}
+
+async function probeProviderQuota(
+  expanded: { provider: Record<string, any>; label: string },
+  probe: boolean
+): Promise<ProviderQuotaResult> {
+  const { provider, label } = expanded;
+  const apiKey =
+    typeof provider.apiKey === "string" && !provider.apiKey.startsWith("env/")
+      ? provider.apiKey
+      : readEnvRef(provider.apiKey) ??
+        (typeof provider.apiToken === "string" && !provider.apiToken.startsWith("env/")
+          ? provider.apiToken
+          : readEnvRef(provider.apiToken));
+  const accountId = readEnvRef(provider.accountId);
+  const freeModelId = firstFreeStaticModelId(provider.staticModels);
+  return probeQuota({
+    providerName: label,
+    apiKey,
+    baseUrl: provider.baseUrl,
+    accountId,
+    probe,
+    freeModelId
+  });
+}
+
+function readEnvRef(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  if (!value.startsWith("env/")) return value;
+  return process.env[value.slice("env/".length)];
+}
+
+// Walks the same NAME, NAME2, NAME3 ... convention resolveSecretList uses so
+// each numeric-suffix key gets its own quota probe (labelled `name#N`).
+function expandProviderKeys(
+  provider: Record<string, any>
+): Array<{ provider: Record<string, any>; label: string }> {
+  const baseName = provider.name ?? provider.type;
+  const secretField = typeof provider.apiKey === "string" ? "apiKey" : "apiToken";
+  const secretRef = provider[secretField];
+  if (typeof secretRef !== "string" || !secretRef.startsWith("env/")) {
+    return [{ provider, label: baseName }];
+  }
+  const varName = secretRef.slice("env/".length);
+  const collected: Array<{ key: string; suffix: string }> = [];
+  const primary = process.env[varName];
+  if (primary) collected.push({ key: primary, suffix: "" });
+  for (let i = 2; ; i += 1) {
+    const next = process.env[`${varName}${i}`];
+    if (!next) break;
+    collected.push({ key: next, suffix: `#${i}` });
+  }
+  if (collected.length === 0) return [{ provider, label: baseName }];
+  return collected.map(({ key, suffix }) => ({
+    provider: { ...provider, [secretField]: key },
+    label: suffix ? `${baseName}${suffix}` : baseName
+  }));
+}
+
+function firstFreeStaticModelId(models: unknown): string | undefined {
+  if (!Array.isArray(models)) return undefined;
+  const first = models.find((m) => m?.free === true);
+  return typeof first?.id === "string" ? first.id : undefined;
+}
+
+function printQuotaRow(r: ProviderQuotaResult): void {
+  const tag =
+    r.source === "api" ? "[api]   " : r.source === "policy" ? "[policy]" : "[no-key]";
+  const parts: string[] = [];
+  if (r.balanceUsd !== undefined) parts.push(`limit=$${r.balanceUsd.toFixed(2)}`);
+  if (r.remainingUsd !== undefined) parts.push(`remaining=$${r.remainingUsd.toFixed(4)}`);
+  if (r.usageUsd !== undefined) parts.push(`used=$${r.usageUsd.toFixed(4)}`);
+  if (r.isFreeTier !== undefined) parts.push(`freeTier=${r.isFreeTier}`);
+  if (r.callable) parts.push(`callable=${r.callable}${r.callableDetail ? `(${r.callableDetail})` : ""}`);
+  if (r.error) parts.push(`error=${r.error}`);
+  console.log(`▸ ${tag} ${r.provider.padEnd(28)} ${parts.join("  ")}`);
+  if (r.freePolicy) console.log(`   ↳ ${r.freePolicy}`);
+}
+
 async function bootstrap(options: CommonOptions) {
   loadDefaultEnvFiles(options.envFile ?? []);
 
@@ -510,6 +634,7 @@ Commands:
   race <prompt>       Fire every candidate in parallel, first success wins
   models              List every callable model, grouped by provider
   broadcast <prompt>  Fire every candidate in parallel, print all responses
+  quota               Show free-tier quota / balance per provider
 
 Common flags:
   --config <path>       Config file (default: ./router.config.json, then router.config.example.json)
@@ -546,6 +671,11 @@ models flags:
 race flags:
   Same as chat, plus:
   --per-provider        Race one best-quality model per provider (dedup fan-out)
+
+quota flags:
+  --probe               Also send a 1-token chat to each provider's first free
+                        model and report OK / rate-limited / unauthorized.
+  --json                Emit raw JSON instead of the table.
 
 broadcast flags:
   --tier <t>            Only broadcast to models in this tier
