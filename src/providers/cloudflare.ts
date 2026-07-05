@@ -13,7 +13,7 @@ export interface CloudflareStaticModelConfig {
 }
 
 export interface CloudflareWorkersAIProviderOptions {
-  accountId: string;
+  accountId?: string;
   apiToken: string;
   name?: string;
   staticModels?: CloudflareStaticModelConfig[];
@@ -24,17 +24,19 @@ export class CloudflareWorkersAIProvider implements ProviderAdapter {
 
   readonly name: string;
 
-  private readonly accountId: string;
-
   private readonly apiToken: string;
 
   private readonly staticModels: CloudflareStaticModelConfig[];
 
+  private accountIdPromise?: Promise<string>;
+
   constructor(options: CloudflareWorkersAIProviderOptions) {
     this.name = options.name ?? "cloudflare";
-    this.accountId = options.accountId;
     this.apiToken = options.apiToken;
     this.staticModels = options.staticModels ?? [];
+    if (options.accountId) {
+      this.accountIdPromise = Promise.resolve(options.accountId);
+    }
   }
 
   async listModels(): Promise<DiscoveredModel[]> {
@@ -65,8 +67,9 @@ export class CloudflareWorkersAIProvider implements ProviderAdapter {
       body.max_tokens = request.maxTokens;
     }
 
+    const accountId = await this.resolveAccountId();
     const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/ai/v1/chat/completions`,
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`,
       {
         method: "POST",
         headers: {
@@ -98,6 +101,36 @@ export class CloudflareWorkersAIProvider implements ProviderAdapter {
   private errorFromResponse(response: Response, message: string): ProviderError {
     const ErrorClass = isRetryableStatus(response.status) ? RetryableProviderError : ProviderError;
     return new ErrorClass(this.name, `${message}: HTTP ${response.status}`, response.status);
+  }
+
+  private resolveAccountId(): Promise<string> {
+    if (!this.accountIdPromise) {
+      this.accountIdPromise = this.discoverAccountId().catch((error) => {
+        this.accountIdPromise = undefined;
+        throw error;
+      });
+    }
+    return this.accountIdPromise;
+  }
+
+  private async discoverAccountId(): Promise<string> {
+    const response = await fetch("https://api.cloudflare.com/client/v4/accounts", {
+      headers: {
+        Authorization: `Bearer ${this.apiToken}`,
+        Accept: "application/json"
+      }
+    });
+
+    if (!response.ok) {
+      throw this.errorFromResponse(response, "Failed to discover Cloudflare account id");
+    }
+
+    const payload = (await response.json()) as { result?: Array<{ id?: unknown }> };
+    const first = payload.result?.[0]?.id;
+    if (typeof first !== "string" || first.length === 0) {
+      throw new ProviderError(this.name, "Cloudflare API returned no accounts for this token");
+    }
+    return first;
   }
 }
 

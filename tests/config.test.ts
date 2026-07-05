@@ -49,4 +49,54 @@ describe("createRouterFromConfig", () => {
       ])
     );
   });
+
+  it("expands numeric-suffixed env vars into fallback provider instances", async () => {
+    process.env.TEST_MULTI_KEY = "sk-primary";
+    process.env.TEST_MULTI_KEY2 = "sk-second";
+    process.env.TEST_MULTI_KEY3 = "sk-third";
+
+    const router = createRouterFromConfig({
+      providers: [
+        {
+          type: "openai-compatible",
+          name: "openrouter",
+          baseUrl: "https://openrouter.ai/api/v1",
+          apiKey: "env/TEST_MULTI_KEY",
+          discoverModels: false,
+          staticModels: [
+            {
+              id: "meta-llama/llama-3.3-70b-instruct:free",
+              free: true,
+              qualityScore: 0.82,
+              contextWindow: 128000
+            }
+          ]
+        }
+      ]
+    });
+
+    const models = await router.listModels();
+    const providerNames = models.map((model) => model.provider);
+
+    expect(providerNames).toEqual(["openrouter", "openrouter#2", "openrouter#3"]);
+  });
+
+  it("throws when env/ reference has no matching variable", () => {
+    delete process.env.TEST_MISSING_KEY;
+
+    expect(() =>
+      createRouterFromConfig({
+        providers: [
+          {
+            type: "openai-compatible",
+            name: "x",
+            baseUrl: "https://example.com/v1",
+            apiKey: "env/TEST_MISSING_KEY",
+            discoverModels: false,
+            staticModels: [{ id: "m", free: true }]
+          }
+        ]
+      })
+    ).toThrow(/TEST_MISSING_KEY/);
+  });
 });

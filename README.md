@@ -6,7 +6,7 @@ The project intentionally does not try to scrape or bypass provider policies. Pr
 
 ## Features
 
-- OpenAI-compatible free-quota providers: OpenRouter, Groq, Mistral, Hugging Face Router, GitHub Models, Cerebras, Requesty, and similar providers.
+- OpenAI-compatible free-quota providers: OpenRouter, Groq, Google (Gemini OpenAI endpoint), Mistral, Hugging Face Router, GitHub Models, Cerebras, Requesty, NVIDIA NIM, Vercel AI Gateway, Z.AI (智谱 GLM), and similar providers.
 - Cloudflare Workers AI support through the Cloudflare chat completions endpoint.
 - Model discovery through `/models` where providers support it.
 - Static free-model metadata for providers that do not expose reliable free flags.
@@ -30,7 +30,9 @@ cp router.config.example.json router.config.json
 
 Fill in the keys you actually want to use. Delete providers you do not use from `router.config.json`.
 
-Configuration values such as `"env/OPENROUTER_API_KEY"` are resolved from `process.env`. Load environment variables in the consuming application if you keep keys in a `.env` file.
+Configuration values such as `"env/OPEN_ROUTER_API_KEY"` are resolved from `process.env`. Load environment variables in the consuming application if you keep keys in a `.env` file.
+
+Numeric-suffixed variables are picked up as fallback keys automatically. If both `OPEN_ROUTER_API_KEY` and `OPEN_ROUTER_API_KEY2` are set, the router creates two provider instances (`openrouter` and `openrouter#2`) and falls back to the next one when the previous fails. The walk stops at the first gap (`KEY`, `KEY2`, `KEY3`, ...).
 
 ## Use In A Node Project
 
@@ -56,7 +58,7 @@ OpenAI-compatible providers use:
   "type": "openai-compatible",
   "name": "openrouter",
   "baseUrl": "https://openrouter.ai/api/v1",
-  "apiKey": "env/OPENROUTER_API_KEY",
+  "apiKey": "env/OPEN_ROUTER_API_KEY",
   "freeModelPatterns": [":free"],
   "staticModels": [
     {
@@ -69,12 +71,11 @@ OpenAI-compatible providers use:
 }
 ```
 
-Cloudflare Workers AI uses account credentials instead of per-model keys:
+Cloudflare Workers AI uses account credentials instead of per-model keys. `accountId` is optional — if omitted, the router calls `GET /accounts` with the token and uses the first account it returns:
 
 ```json
 {
   "type": "cloudflare-workers-ai",
-  "accountId": "env/CLOUDFLARE_ACCOUNT_ID",
   "apiToken": "env/CLOUDFLARE_API_TOKEN",
   "staticModels": [
     {

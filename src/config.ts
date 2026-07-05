@@ -5,7 +5,7 @@ import { z } from "zod";
 import { ModelRouter } from "./router.js";
 import { CloudflareWorkersAIProvider } from "./providers/cloudflare.js";
 import { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
-import type { RouterOptions } from "./types.js";
+import type { ProviderAdapter, RouterOptions } from "./types.js";
 
 const staticModelSchema = z.object({
   id: z.string(),
@@ -28,7 +28,7 @@ const openAICompatibleProviderSchema = z.object({
 const cloudflareProviderSchema = z.object({
   type: z.literal("cloudflare-workers-ai"),
   name: z.string().optional(),
-  accountId: z.string(),
+  accountId: z.string().optional(),
   apiToken: z.string(),
   staticModels: z.array(staticModelSchema).optional()
 });
@@ -63,25 +63,34 @@ export async function createRouterFromFile(path: string): Promise<ModelRouter> {
 
 export function createRouterFromConfig(input: unknown): ModelRouter {
   const config = configSchema.parse(input);
-  const providers = config.providers.map((provider) => {
+  const providers: ProviderAdapter[] = config.providers.flatMap((provider): ProviderAdapter[] => {
     if (provider.type === "openai-compatible") {
-      return new OpenAICompatibleProvider({
-        name: provider.name,
-        baseUrl: provider.baseUrl,
-        apiKey: resolveSecret(provider.apiKey),
-        headers: provider.headers,
-        freeModelPatterns: provider.freeModelPatterns,
-        staticModels: provider.staticModels,
-        discoverModels: provider.discoverModels
-      });
+      const apiKeys = resolveSecretList(provider.apiKey);
+      const variants = apiKeys.length > 0 ? apiKeys : [undefined];
+      return variants.map((apiKey, index) =>
+        new OpenAICompatibleProvider({
+          name: instanceName(provider.name, index),
+          baseUrl: provider.baseUrl,
+          apiKey,
+          headers: provider.headers,
+          freeModelPatterns: provider.freeModelPatterns,
+          staticModels: provider.staticModels,
+          discoverModels: provider.discoverModels
+        })
+      );
     }
 
-    return new CloudflareWorkersAIProvider({
-      name: provider.name,
-      accountId: resolveSecret(provider.accountId) ?? provider.accountId,
-      apiToken: resolveSecret(provider.apiToken) ?? provider.apiToken,
-      staticModels: provider.staticModels
-    });
+    const accountId = resolveOptionalSecret(provider.accountId);
+    const apiTokens = resolveSecretList(provider.apiToken);
+    const baseName = provider.name ?? "cloudflare";
+    return apiTokens.map((apiToken, index) =>
+      new CloudflareWorkersAIProvider({
+        name: instanceName(baseName, index),
+        accountId,
+        apiToken,
+        staticModels: provider.staticModels
+      })
+    );
   });
 
   const options: RouterOptions = {
@@ -92,6 +101,10 @@ export function createRouterFromConfig(input: unknown): ModelRouter {
   };
 
   return new ModelRouter(options);
+}
+
+function instanceName(base: string, index: number): string {
+  return index === 0 ? base : `${base}#${index + 1}`;
 }
 
 function resolveSecret(value: string | undefined): string | undefined {
@@ -107,4 +120,48 @@ function resolveSecret(value: string | undefined): string | undefined {
   }
 
   return resolved;
+}
+
+function resolveOptionalSecret(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!value.startsWith("env/")) {
+    return value;
+  }
+  const name = value.slice("env/".length);
+  return process.env[name] || undefined;
+}
+
+// Resolves `env/NAME` by walking NAME, NAME2, NAME3, ... so operators can drop
+// backup keys into their .env and get automatic fallback provider instances.
+function resolveSecretList(value: string | undefined): string[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  if (!value.startsWith("env/")) {
+    return [value];
+  }
+
+  const name = value.slice("env/".length);
+  const values: string[] = [];
+  const primary = process.env[name];
+  if (primary) {
+    values.push(primary);
+  }
+
+  for (let suffix = 2; ; suffix += 1) {
+    const next = process.env[`${name}${suffix}`];
+    if (!next) {
+      break;
+    }
+    values.push(next);
+  }
+
+  if (values.length === 0) {
+    throw new Error(`Missing environment variable: ${name}`);
+  }
+
+  return values;
 }

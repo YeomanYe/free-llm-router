@@ -12,7 +12,7 @@
       "type": "openai-compatible",
       "name": "openrouter",
       "baseUrl": "https://openrouter.ai/api/v1",
-      "apiKey": "env/OPENROUTER_API_KEY",
+      "apiKey": "env/OPEN_ROUTER_API_KEY",
       "freeModelPatterns": [":free"],
       "staticModels": [
         {
@@ -41,7 +41,7 @@
       "type": "openai-compatible",
       "name": "gemini-openai-compatible",
       "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
-      "apiKey": "env/GEMINI_API_KEY",
+      "apiKey": "env/GOOGLE_API_KEY",
       "staticModels": [
         {
           "id": "gemini-2.0-flash",
@@ -108,21 +108,108 @@
       ]
     },
     {
-      "type": "cloudflare-workers-ai",
-      "accountId": "env/CLOUDFLARE_ACCOUNT_ID",
-      "apiToken": "env/CLOUDFLARE_API_TOKEN",
+      "type": "openai-compatible",
+      "name": "requesty",
+      "baseUrl": "https://router.requesty.ai/v1",
+      "apiKey": "env/REQUESTY_API_KEY",
       "staticModels": [
         {
-          "id": "@cf/meta/llama-3.1-8b-instruct",
+          "id": "openai/gpt-4o-mini",
+          "free": true,
+          "contextWindow": 128000,
+          "qualityScore": 0.74
+        }
+      ]
+    },
+    {
+      "type": "openai-compatible",
+      "name": "nvidia",
+      "baseUrl": "https://integrate.api.nvidia.com/v1",
+      "apiKey": "env/NVIDIA_API_KEY",
+      "staticModels": [
+        {
+          "id": "meta/llama-3.1-70b-instruct",
+          "free": true,
+          "contextWindow": 131072,
+          "qualityScore": 0.78
+        }
+      ]
+    },
+    {
+      "type": "openai-compatible",
+      "name": "vercel-ai-gateway",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "env/VERCEL_AI_KEY",
+      "staticModels": [
+        {
+          "id": "openai/gpt-4o-mini",
+          "free": true,
+          "contextWindow": 128000,
+          "qualityScore": 0.74
+        }
+      ]
+    },
+    {
+      "type": "openai-compatible",
+      "name": "bigmodel",
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      "apiKey": "env/BIG_MODEL_API_KEY",
+      "discoverModels": false,
+      "staticModels": [
+        {
+          "id": "glm-4-flash",
+          "free": true,
+          "contextWindow": 128000,
+          "qualityScore": 0.65
+        },
+        {
+          "id": "glm-4-flash-250414",
+          "free": true,
+          "contextWindow": 128000,
+          "qualityScore": 0.66
+        },
+        {
+          "id": "glm-4.5-flash",
+          "free": true,
+          "contextWindow": 128000,
+          "qualityScore": 0.7
+        },
+        {
+          "id": "glm-4v-flash",
           "free": true,
           "contextWindow": 8192,
           "qualityScore": 0.55
+        }
+      ]
+    },
+    {
+      "type": "cloudflare-workers-ai",
+      "accountId": "env/CLOUDFLARE_ACCOUNT_ID",
+      "apiToken": "env/CLOUDFLARE_WORKER_AI_TOKEN",
+      "staticModels": [
+        {
+          "id": "@cf/meta/llama-3.2-3b-instruct",
+          "free": true,
+          "contextWindow": 80000,
+          "qualityScore": 0.5
         },
         {
-          "id": "@cf/mistral/mistral-7b-instruct-v0.2-lora",
+          "id": "@cf/meta/llama-3.1-8b-instruct-fp8",
           "free": true,
-          "contextWindow": 8192,
-          "qualityScore": 0.5
+          "contextWindow": 32000,
+          "qualityScore": 0.55
+        },
+        {
+          "id": "@cf/google/gemma-4-26b-a4b-it",
+          "free": true,
+          "contextWindow": 256000,
+          "qualityScore": 0.72
+        },
+        {
+          "id": "@cf/openai/gpt-oss-20b",
+          "free": true,
+          "contextWindow": 128000,
+          "qualityScore": 0.7
         }
       ]
     }
