@@ -55,6 +55,7 @@ async function runChat(argv: string[]): Promise<void> {
       model: { type: "string" },
       models: { type: "string" },
       providers: { type: "string" },
+      "fallback-to-rest": { type: "boolean" },
       "max-tokens": { type: "string" },
       temperature: { type: "string" },
       system: { type: "string" }
@@ -83,6 +84,7 @@ async function runChat(argv: string[]): Promise<void> {
     model: values.model,
     models: splitList(values.models),
     providers: splitList(values.providers),
+    fallbackToRest: values["fallback-to-rest"],
     maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
     temperature: values.temperature ? Number(values.temperature) : undefined
   });
@@ -104,6 +106,7 @@ async function runRace(argv: string[]): Promise<void> {
       model: { type: "string" },
       models: { type: "string" },
       providers: { type: "string" },
+      "fallback-to-rest": { type: "boolean" },
       "per-provider": { type: "boolean" },
       "max-tokens": { type: "string" },
       temperature: { type: "string" },
@@ -135,6 +138,7 @@ async function runRace(argv: string[]): Promise<void> {
       model: values.model,
       models: splitList(values.models),
       providers: splitList(values.providers),
+      fallbackToRest: values["fallback-to-rest"],
       maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
       temperature: values.temperature ? Number(values.temperature) : undefined
     },
@@ -398,6 +402,8 @@ chat flags:
   --model <name>        Force a specific model (e.g. openrouter/openai/gpt-oss-20b)
   --models <a,b,c>      Try each in order, first success wins (comma separated)
   --providers <a,b,c>   Restrict + order providers (combines with --tier)
+  --fallback-to-rest    Treat --model/--models/--providers as preferred prefix,
+                        fall through to the remaining tier-filtered pool
   --system <text>       Prepend a system message
   --max-tokens <n>      Response cap
   --temperature <n>     Sampling temperature

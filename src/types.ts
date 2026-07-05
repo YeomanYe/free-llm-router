@@ -33,6 +33,10 @@ export interface ChatRequest {
   model?: string;
   models?: string[];
   providers?: string[];
+  // When true the explicit model/models/providers list is treated as a
+  // preferred prefix and the router falls through to the tier-filtered pool
+  // instead of hard-failing when the whole list errors out.
+  fallbackToRest?: boolean;
   tier?: ModelTier;
   messages: ChatMessage[];
   temperature?: number;

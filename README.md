@@ -75,6 +75,9 @@ flr chat --model bigmodel/glm-4.5-flash "..."
 flr chat --models "bigmodel/glm-4-flash,cloudflare/@cf/openai/gpt-oss-20b" "..."
 flr chat --providers "bigmodel,cloudflare,openrouter" --tier medium-1 "..."
 
+# Preferred prefix + fall through to the rest of the tier pool if all preferred fail
+flr chat --providers "bigmodel" --fallback-to-rest --tier medium-1 "..."
+
 # Fire every candidate in parallel and return whoever answers first
 flr race --tier medium-1 "..."
 flr race --providers "bigmodel,cloudflare" "..."

@@ -143,28 +143,28 @@ export class ModelRouter {
 
   private async selectCandidates(request: ChatRequest): Promise<Candidate[]> {
     const candidates = await this.getCandidates(false);
-
-    if (request.models && request.models.length > 0) {
-      return orderedMatch(candidates, request.models);
-    }
-
-    if (request.model) {
-      return matchModel(candidates, request.model);
-    }
-
-    let filtered = candidates.filter((candidate) => {
+    const tiered = candidates.filter((candidate) => {
       if (request.tier && candidate.model.tier !== request.tier) {
         return false;
       }
-
       return this.fallbackTiers.includes(candidate.model.tier ?? "low-3");
     });
 
-    if (request.providers && request.providers.length > 0) {
-      filtered = orderByProviders(filtered, request.providers);
+    let head: Candidate[] | undefined;
+    if (request.models && request.models.length > 0) {
+      head = orderedMatch(candidates, request.models);
+    } else if (request.model) {
+      head = matchModel(candidates, request.model);
+    } else if (request.providers && request.providers.length > 0) {
+      head = orderByProviders(tiered, request.providers);
     }
 
-    return filtered;
+    if (head === undefined) return tiered;
+    if (!request.fallbackToRest) return head;
+
+    const seen = new Set(head);
+    const tail = tiered.filter((c) => !seen.has(c));
+    return [...head, ...tail];
   }
 
   private async getCandidates(refresh: boolean): Promise<Candidate[]> {

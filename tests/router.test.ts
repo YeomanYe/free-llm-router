@@ -126,6 +126,42 @@ describe("ModelRouter", () => {
     expect(gamma.attempts).toBe(1);
   });
 
+  it("fallbackToRest walks preferred providers then falls through to the rest", async () => {
+    const preferred = new FakeProvider("preferred", "always-fail");
+    const backup = new FakeProvider("backup", "succeed");
+    const router = new ModelRouter({
+      providers: [preferred, backup],
+      retry: { maxRetries: 0, baseDelayMs: 0 }
+    });
+
+    const response = await router.chat({
+      messages: [{ role: "user", content: "hi" }],
+      providers: ["preferred"],
+      fallbackToRest: true
+    });
+
+    expect(response.provider).toBe("backup");
+    expect(preferred.attempts).toBe(1);
+    expect(backup.attempts).toBe(1);
+  });
+
+  it("without fallbackToRest an exhausted providers list surfaces the last error", async () => {
+    const preferred = new FakeProvider("preferred", "always-fail");
+    const backup = new FakeProvider("backup", "succeed");
+    const router = new ModelRouter({
+      providers: [preferred, backup],
+      retry: { maxRetries: 0, baseDelayMs: 0 }
+    });
+
+    await expect(
+      router.chat({
+        messages: [{ role: "user", content: "hi" }],
+        providers: ["preferred"]
+      })
+    ).rejects.toThrow(/rate limited/);
+    expect(backup.attempts).toBe(0);
+  });
+
   it("chatRace returns the first successful response and hits every candidate", async () => {
     const slow = new SlowProvider("slow", 40);
     const fast = new SlowProvider("fast", 5);
