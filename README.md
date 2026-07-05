@@ -10,7 +10,7 @@ The project intentionally does not try to scrape or bypass provider policies. Pr
 - Cloudflare Workers AI support through the Cloudflare chat completions endpoint.
 - Model discovery through `/models` where providers support it.
 - Static free-model metadata for providers that do not expose reliable free flags.
-- High / medium / low tier classification.
+- Nine-tier classification (`high-1` … `low-3`, three sub-tiers per band).
 - Retry and fallback across providers.
 
 ## Install
@@ -97,11 +97,13 @@ Models are scored from:
 - chat/tool/vision capabilities
 - rough rate-limit metadata
 
-The score maps into:
+The score maps into nine tiers arranged best-to-worst, three sub-tiers per band:
 
-- `high`
-- `medium`
-- `low`
+- `high-1` `high-2` `high-3` (score ≥ 10 / 8 / 7)
+- `medium-1` `medium-2` `medium-3` (score = 6 / 5 / 4)
+- `low-1` `low-2` `low-3` (score = 3 / 2 / ≤ 1)
+
+Within a band the lower suffix is the stronger model. `fallback.tiers` defaults to all nine in order, so the router walks from `high-1` down to `low-3`.
 
 You should tune `qualityScore` and `staticModels` for your own model list. Provider APIs do not consistently expose benchmark quality or free quota status.
 

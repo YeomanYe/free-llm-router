@@ -49,7 +49,8 @@ for (const name of names) {
   for (const m of list) {
     const flag = m.free ? "free" : "paid";
     const ctx = m.contextWindow ? `${m.contextWindow.toLocaleString()} ctx` : "";
-    console.log(`  · [${flag}] ${m.id}${ctx ? "  " + ctx : ""}`);
+    const tier = m.tier ? `[${m.tier}]` : "";
+    console.log(`  · [${flag}] ${tier} ${m.id}${ctx ? "  " + ctx : ""}`);
   }
 }
 

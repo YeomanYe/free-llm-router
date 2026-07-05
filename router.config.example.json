@@ -5,7 +5,17 @@
     "baseDelayMs": 200
   },
   "fallback": {
-    "tiers": ["high", "medium", "low"]
+    "tiers": [
+      "high-1",
+      "high-2",
+      "high-3",
+      "medium-1",
+      "medium-2",
+      "medium-3",
+      "low-1",
+      "low-2",
+      "low-3"
+    ]
   },
   "providers": [
     {

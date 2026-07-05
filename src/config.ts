@@ -48,7 +48,21 @@ const configSchema = z.object({
     .optional(),
   fallback: z
     .object({
-      tiers: z.array(z.enum(["high", "medium", "low"])).optional()
+      tiers: z
+        .array(
+          z.enum([
+            "high-1",
+            "high-2",
+            "high-3",
+            "medium-1",
+            "medium-2",
+            "medium-3",
+            "low-1",
+            "low-2",
+            "low-3"
+          ])
+        )
+        .optional()
     })
     .optional(),
   providers: z.array(providerSchema).min(1)

@@ -56,7 +56,19 @@ describe("ModelRouter", () => {
     const router = new ModelRouter({
       providers: [first, second],
       retry: { maxRetries: 2, baseDelayMs: 0 },
-      fallback: { tiers: ["high", "medium", "low"] }
+      fallback: {
+        tiers: [
+          "high-1",
+          "high-2",
+          "high-3",
+          "medium-1",
+          "medium-2",
+          "medium-3",
+          "low-1",
+          "low-2",
+          "low-3"
+        ]
+      }
     });
 
     const response = await router.chat({

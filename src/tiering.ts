@@ -39,15 +39,15 @@ export function classifyModelTier(model: DiscoveredModel): ModelTier {
     score -= 1;
   }
 
-  if (score >= 7) {
-    return "high";
-  }
-
-  if (score >= 4) {
-    return "medium";
-  }
-
-  return "low";
+  if (score >= 10) return "high-1";
+  if (score >= 8) return "high-2";
+  if (score >= 7) return "high-3";
+  if (score >= 6) return "medium-1";
+  if (score >= 5) return "medium-2";
+  if (score >= 4) return "medium-3";
+  if (score >= 3) return "low-1";
+  if (score >= 2) return "low-2";
+  return "low-3";
 }
 
 export function withTier(model: DiscoveredModel): DiscoveredModel {

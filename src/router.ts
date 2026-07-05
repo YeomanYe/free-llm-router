@@ -1,13 +1,14 @@
 import { NoAvailableModelError, isRetryableError } from "./errors.js";
 import { withTier } from "./tiering.js";
-import type {
-  ChatRequest,
-  ChatResponse,
-  DiscoveredModel,
-  ModelTier,
-  ProviderAdapter,
-  RetryPolicy,
-  RouterOptions
+import {
+  MODEL_TIERS,
+  type ChatRequest,
+  type ChatResponse,
+  type DiscoveredModel,
+  type ModelTier,
+  type ProviderAdapter,
+  type RetryPolicy,
+  type RouterOptions
 } from "./types.js";
 
 interface Candidate {
@@ -32,7 +33,7 @@ export class ModelRouter {
       maxRetries: options.retry?.maxRetries ?? 2,
       baseDelayMs: options.retry?.baseDelayMs ?? 250
     };
-    this.fallbackTiers = options.fallback?.tiers ?? ["high", "medium", "low"];
+    this.fallbackTiers = options.fallback?.tiers ?? [...MODEL_TIERS];
     this.freeOnly = options.freeOnly ?? true;
   }
 
@@ -94,7 +95,7 @@ export class ModelRouter {
         return false;
       }
 
-      return this.fallbackTiers.includes(candidate.model.tier ?? "low");
+      return this.fallbackTiers.includes(candidate.model.tier ?? "low-3");
     });
   }
 

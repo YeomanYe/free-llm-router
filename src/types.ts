@@ -1,4 +1,25 @@
-export type ModelTier = "high" | "medium" | "low";
+export type ModelTier =
+  | "high-1"
+  | "high-2"
+  | "high-3"
+  | "medium-1"
+  | "medium-2"
+  | "medium-3"
+  | "low-1"
+  | "low-2"
+  | "low-3";
+
+export const MODEL_TIERS: readonly ModelTier[] = [
+  "high-1",
+  "high-2",
+  "high-3",
+  "medium-1",
+  "medium-2",
+  "medium-3",
+  "low-1",
+  "low-2",
+  "low-3"
+];
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
 
