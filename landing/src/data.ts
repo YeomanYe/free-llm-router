@@ -89,15 +89,6 @@ export const providers: Provider[] = [
     quota: "Rate-limited per model, no per-key balance API",
     policy: "Token permissions matter — grant Inference access.",
     applyUrl: "https://huggingface.co/settings/tokens"
-  },
-  {
-    name: "NVIDIA NIM",
-    status: "credit",
-    envVar: "NVIDIA_API_KEY",
-    models: "meta/llama-3.1-70b-instruct · nemotron-4 · mixtral-8x22b …",
-    quota: "≈5 000 free credits per personal account",
-    policy: "Opt in with --no-free-only. Console at build.nvidia.com.",
-    applyUrl: "https://build.nvidia.com/settings/api-keys"
   }
 ];
 

@@ -119,20 +119,6 @@
     },
     {
       "type": "openai-compatible",
-      "name": "nvidia",
-      "baseUrl": "https://integrate.api.nvidia.com/v1",
-      "apiKey": "env/NVIDIA_API_KEY",
-      "staticModels": [
-        {
-          "id": "meta/llama-3.1-70b-instruct",
-          "free": false,
-          "contextWindow": 131072,
-          "qualityScore": 0.78
-        }
-      ]
-    },
-    {
-      "type": "openai-compatible",
       "name": "bigmodel",
       "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
       "apiKey": "env/BIG_MODEL_API_KEY",

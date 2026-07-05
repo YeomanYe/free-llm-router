@@ -34,7 +34,6 @@ const HARDCODED_FREE_POLICY: Record<string, string> = {
     "~30 rpm per model, ~6-14k tpm, 500k tpd (per model). Free tier is generous but not queryable.",
   cerebras: "30 rpm, 60k tpm, ~900k tpd on llama-3.1-8b free tier.",
   bigmodel: "glm-4-flash / glm-4v-flash: officially permanent free, no advertised cap.",
-  nvidia: "NIM free credits (~5k requests / personal account). Not queryable via REST.",
   cloudflare: "Workers AI: 10 000 neurons / day rolling. Analytics via GraphQL requires separate scope.",
   "cloudflare-workers-ai":
     "Workers AI: 10 000 neurons / day rolling. Analytics via GraphQL requires separate scope.",

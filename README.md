@@ -6,7 +6,7 @@ The project intentionally does not try to scrape or bypass provider policies. Pr
 
 ## Features
 
-- OpenAI-compatible free-quota providers: OpenRouter, Groq, Google (Gemini OpenAI endpoint), Mistral, Hugging Face Router, GitHub Models, Cerebras, NVIDIA NIM, Z.AI (智谱 GLM), and similar providers.
+- OpenAI-compatible free-quota providers: OpenRouter, Groq, Google (Gemini OpenAI endpoint), Mistral, Hugging Face Router, GitHub Models, Cerebras, Z.AI (智谱 GLM), and similar providers.
 - Cloudflare Workers AI support through the Cloudflare chat completions endpoint.
 - Model discovery through `/models` where providers support it.
 - Static free-model metadata for providers that do not expose reliable free flags.
