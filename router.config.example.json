@@ -119,20 +119,6 @@
     },
     {
       "type": "openai-compatible",
-      "name": "requesty",
-      "baseUrl": "https://router.requesty.ai/v1",
-      "apiKey": "env/REQUESTY_API_KEY",
-      "staticModels": [
-        {
-          "id": "openai/gpt-4o-mini",
-          "free": false,
-          "contextWindow": 128000,
-          "qualityScore": 0.74
-        }
-      ]
-    },
-    {
-      "type": "openai-compatible",
       "name": "nvidia",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "apiKey": "env/NVIDIA_API_KEY",
@@ -142,20 +128,6 @@
           "free": false,
           "contextWindow": 131072,
           "qualityScore": 0.78
-        }
-      ]
-    },
-    {
-      "type": "openai-compatible",
-      "name": "vercel-ai-gateway",
-      "baseUrl": "https://ai-gateway.vercel.sh/v1",
-      "apiKey": "env/VERCEL_AI_KEY",
-      "staticModels": [
-        {
-          "id": "openai/gpt-4o-mini",
-          "free": false,
-          "contextWindow": 128000,
-          "qualityScore": 0.74
         }
       ]
     },

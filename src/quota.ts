@@ -35,11 +35,9 @@ const HARDCODED_FREE_POLICY: Record<string, string> = {
   cerebras: "30 rpm, 60k tpm, ~900k tpd on llama-3.1-8b free tier.",
   bigmodel: "glm-4-flash / glm-4v-flash: officially permanent free, no advertised cap.",
   nvidia: "NIM free credits (~5k requests / personal account). Not queryable via REST.",
-  "vercel-ai-gateway": "$5 signup credit; balance is queryable, model-level free lists via /credits.",
   cloudflare: "Workers AI: 10 000 neurons / day rolling. Analytics via GraphQL requires separate scope.",
   "cloudflare-workers-ai":
     "Workers AI: 10 000 neurons / day rolling. Analytics via GraphQL requires separate scope.",
-  requesty: "Aggregator free tier ~ $1 signup credit; individual model quota depends on backing provider.",
   mistral: "Free tier: 1 rps and 500k tokens/mo on la Plateforme (not queryable).",
   huggingface: "Router free tier: rate-limited per model, no per-key balance API.",
   "github-models": "GitHub Models free tier: shared rate limit tied to your GitHub account (see docs)."
@@ -62,9 +60,6 @@ export async function probeQuota(ctx: ProbeContext): Promise<ProviderQuotaResult
   switch (base) {
     case "openrouter":
       result = await probeOpenRouter(ctx.providerName, ctx.apiKey!);
-      break;
-    case "vercel-ai-gateway":
-      result = await probeVercelAiGateway(ctx.providerName, ctx.apiKey!);
       break;
     default:
       result = policyOnly(ctx.providerName);
@@ -116,37 +111,6 @@ async function probeOpenRouter(name: string, apiKey: string): Promise<ProviderQu
       source: "api",
       error: error instanceof Error ? error.message : String(error),
       freePolicy: HARDCODED_FREE_POLICY.openrouter
-    };
-  }
-}
-
-async function probeVercelAiGateway(name: string, apiKey: string): Promise<ProviderQuotaResult> {
-  try {
-    const response = await fetch("https://ai-gateway.vercel.sh/v1/credits", {
-      headers: { Authorization: `Bearer ${apiKey}` }
-    });
-    if (!response.ok) {
-      return {
-        provider: name,
-        source: "api",
-        error: `HTTP ${response.status}`,
-        freePolicy: HARDCODED_FREE_POLICY["vercel-ai-gateway"]
-      };
-    }
-    const payload = (await response.json()) as { balance?: string; total_used?: string };
-    return {
-      provider: name,
-      source: "api",
-      balanceUsd: payload.balance ? Number(payload.balance) : undefined,
-      usageUsd: payload.total_used ? Number(payload.total_used) : undefined,
-      freePolicy: HARDCODED_FREE_POLICY["vercel-ai-gateway"]
-    };
-  } catch (error) {
-    return {
-      provider: name,
-      source: "api",
-      error: error instanceof Error ? error.message : String(error),
-      freePolicy: HARDCODED_FREE_POLICY["vercel-ai-gateway"]
     };
   }
 }
