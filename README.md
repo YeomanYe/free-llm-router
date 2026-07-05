@@ -1,6 +1,6 @@
 # Free LLM Router
 
-Config-driven Node.js router for free and low-cost LLM providers. It is intended to be imported as a library inside another Node.js project.
+Config-driven Node.js router for free and low-cost LLM providers. Can be imported as a library or invoked as a CLI (`flr`).
 
 The project intentionally does not try to scrape or bypass provider policies. Provider APIs often do not expose whether a model is free, so free eligibility is a mix of discovery plus your maintained static policy metadata.
 
@@ -42,12 +42,35 @@ import { createRouterFromFile } from "free-llm-router";
 const router = await createRouterFromFile("router.config.json");
 
 const response = await router.chat({
-  tier: "high",
+  tier: "high-1",
   messages: [{ role: "user", content: "Summarize free model routing in one sentence" }]
 });
 
 console.log(response.content);
 ```
+
+## CLI
+
+The package installs a `flr` binary. Point it at a config and (optionally) an env file:
+
+```bash
+# One-shot chat, tier fallback picks the best available model
+flr chat --config router.config.example.json --env-file ~/.env "Explain routers in one sentence"
+
+# Force a specific tier or model
+flr chat --tier medium-1 "..."
+flr chat --model bigmodel/glm-4.5-flash "..."
+
+# Enumerate every callable model, grouped by provider
+flr models
+flr models --json
+
+# Send one prompt to every free model and print each response
+flr broadcast "用一句话中文自我介绍并说出你是什么模型"
+flr broadcast --tier medium-1 --timeout 30000 "hi"
+```
+
+During local development the same commands are available via `npm run cli -- <args>`, which shells to `tsx src/cli.ts` and skips the build step.
 
 ## Provider Notes
 
