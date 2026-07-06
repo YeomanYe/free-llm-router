@@ -8,6 +8,8 @@ export {
   RetryableProviderError,
   TimeoutError,
 } from "./errors.js";
+export { AnthropicMessagesProvider } from "./providers/anthropic.js";
+export type { AnthropicProviderOptions } from "./providers/anthropic.js";
 export { CloudflareWorkersAIProvider } from "./providers/cloudflare.js";
 export { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
 export type { FanOutOptions } from "./router.js";
@@ -22,6 +24,8 @@ export type {
   DiscoveredModel,
   ModelCapabilities,
   ModelTier,
+  ObjectRequest,
+  ObjectResponse,
   ProviderAdapter,
   RouterOptions,
   UsageStats,

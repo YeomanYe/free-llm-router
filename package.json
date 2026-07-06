@@ -1,6 +1,6 @@
 {
   "name": "free-llm-router",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Config-driven Node.js router for free/low-cost LLM providers with discovery, tiering, retry, fallback, and Cloudflare Workers AI support.",
   "type": "module",
   "main": "dist/index.js",
