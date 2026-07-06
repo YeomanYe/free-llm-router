@@ -3,8 +3,11 @@ import type {
   ChatResponse,
   ChatStreamChunk,
   DiscoveredModel,
+  ObjectRequest,
+  ObjectResponse,
   ProviderAdapter,
 } from "../types.js";
+import { ProviderError } from "../errors.js";
 import {
   buildChatBody,
   classifyAbort,
@@ -141,12 +144,82 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
     yield* parseOpenAIStream(response);
   }
 
+  async object(request: ObjectRequest & { model: string }): Promise<ObjectResponse> {
+    const timeoutMs = request.timeoutMs ?? this.defaultTimeoutMs;
+    const toolName = request.schemaName ?? "structured_output";
+    const body = {
+      ...buildChatBody({ ...request, stream: false }),
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: toolName,
+            description: "Return structured output matching the schema",
+            parameters: request.schema,
+          },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: toolName } },
+    };
+
+    const response = await this.postCompletionBody(body, request.signal, timeoutMs);
+
+    const payload = (await response.json()) as {
+      id?: string;
+      model?: string;
+      choices?: Array<{
+        message?: {
+          tool_calls?: Array<{ function?: { name?: string; arguments?: string } }>;
+        };
+      }>;
+      usage?: unknown;
+    };
+
+    const call = payload.choices?.[0]?.message?.tool_calls?.[0];
+    const args = call?.function?.arguments;
+    if (!args) {
+      throw new ProviderError(
+        this.name,
+        "openai-compatible model did not return structured output",
+      );
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(args);
+    } catch (error) {
+      throw new ProviderError(this.name, "openai-compatible tool arguments were not valid JSON", {
+        cause: error,
+      });
+    }
+
+    return {
+      id: typeof payload.id === "string" ? payload.id : `${this.name}-${Date.now()}`,
+      model: typeof payload.model === "string" ? payload.model : request.model,
+      provider: this.name,
+      object: parsed,
+      raw: payload,
+      usage: normalizeUsage(payload.usage),
+    };
+  }
+
   private async postCompletion(
     request: ChatRequest & { model: string },
     stream: boolean,
     timeoutMs: number | undefined,
   ): Promise<Response> {
     const body = buildChatBody({ ...request, stream });
+    return this.postCompletionBody(body, request.signal, timeoutMs);
+  }
+
+  // Single HTTP path for /chat/completions shared by chat(), streamChat(), and
+  // object(). Centralizes headers, abort/timeout composition, and error mapping
+  // so every caller gets identical reliability guarantees.
+  private async postCompletionBody(
+    body: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    timeoutMs: number | undefined,
+  ): Promise<Response> {
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/chat/completions`, {
@@ -156,7 +229,7 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
-        signal: composeAbortSignal(request.signal, timeoutMs),
+        signal: composeAbortSignal(signal, timeoutMs),
       });
     } catch (error) {
       throw classifyAbort(this.name, error, timeoutMs);
