@@ -16,8 +16,8 @@ export type { FanOutOptions } from "./router.js";
 export { ModelRouter, pickBestModelPerProvider } from "./router.js";
 export { classifyModelTier, withTier } from "./tiering.js";
 export type {
-  ChatAllResult,
   ChatMessage,
+  ChatAllResult,
   ChatRequest,
   ChatResponse,
   ChatStreamChunk,
@@ -28,5 +28,9 @@ export type {
   ObjectResponse,
   ProviderAdapter,
   RouterOptions,
+  StopReason,
+  ToolCall,
+  ToolChoice,
+  ToolDef,
   UsageStats,
 } from "./types.js";

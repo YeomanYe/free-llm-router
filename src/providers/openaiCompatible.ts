@@ -6,6 +6,7 @@ import type {
   ObjectRequest,
   ObjectResponse,
   ProviderAdapter,
+  StopReason,
 } from "../types.js";
 import { ProviderError } from "../errors.js";
 import {
@@ -23,6 +24,20 @@ export interface StaticModelConfig {
   free?: boolean;
   contextWindow?: number;
   qualityScore?: number;
+}
+
+/** Map OpenAI `finish_reason` to the normalized StopReason. */
+function fromOpenAIFinishReason(value: string): StopReason {
+  switch (value) {
+    case "tool_calls":
+      return "tool_use";
+    case "stop":
+      return "end_turn";
+    case "length":
+      return "max_tokens";
+    default:
+      return "other";
+  }
 }
 
 export interface OpenAICompatibleProviderOptions {
@@ -105,15 +120,32 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
       .filter(
         (model): model is { id: string; [key: string]: unknown } => typeof model.id === "string",
       )
-      .map((model) => ({
-        id: model.id,
-        provider: this.name,
-        name: model.id,
-        free: this.isFreeModel(model.id),
-        source: "discovered" as const,
-        capabilities: { chat: true },
-        raw: model,
-      }));
+      .map((model) => {
+        // Map the upstream (e.g. OpenRouter) /models metadata into the fields
+        // classifyModelTier scores on. Without contextWindow/vision every
+        // discovered model scores 1 (chat only) → all collapse into low-3, so
+        // "free medium" would never materialize. OpenRouter returns
+        // `context_length` and `architecture.input_modalities`.
+        const meta = model as {
+          context_length?: number;
+          architecture?: { input_modalities?: unknown };
+        };
+        const modalities = Array.isArray(meta.architecture?.input_modalities)
+          ? (meta.architecture?.input_modalities as unknown[])
+          : [];
+        return {
+          id: model.id,
+          provider: this.name,
+          name: model.id,
+          free: this.isFreeModel(model.id),
+          source: "discovered" as const,
+          ...(typeof meta.context_length === "number"
+            ? { contextWindow: meta.context_length }
+            : {}),
+          capabilities: { chat: true, vision: modalities.includes("image") },
+          raw: model,
+        };
+      });
   }
 
   async chat(request: ChatRequest & { model: string }): Promise<ChatResponse> {
@@ -123,10 +155,34 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
     const payload = (await response.json()) as {
       id?: string;
       model?: string;
-      choices?: Array<{ message?: { content?: unknown } }>;
+      choices?: Array<{
+        finish_reason?: string | null;
+        message?: {
+          content?: unknown;
+          tool_calls?: Array<{
+            id?: string;
+            function?: { name?: string; arguments?: string };
+          }>;
+        };
+      }>;
       usage?: unknown;
     };
     const content = extractOpenAIContent(payload);
+    const choice = payload.choices?.[0];
+    const toolCalls = (choice?.message?.tool_calls ?? [])
+      .filter((c) => typeof c.id === "string")
+      .map((c) => {
+        let input: unknown = {};
+        const args = c.function?.arguments;
+        if (args) {
+          try {
+            input = JSON.parse(args);
+          } catch {
+            input = { __rawArguments: args };
+          }
+        }
+        return { id: c.id as string, name: c.function?.name ?? "", input };
+      });
 
     return {
       id: typeof payload.id === "string" ? payload.id : `${this.name}-${Date.now()}`,
@@ -135,6 +191,8 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
       content,
       raw: payload,
       usage: normalizeUsage(payload.usage),
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      ...(choice?.finish_reason ? { stopReason: fromOpenAIFinishReason(choice.finish_reason) } : {}),
     };
   }
 

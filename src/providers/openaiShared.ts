@@ -5,14 +5,70 @@ import {
   RetryableProviderError,
   TimeoutError,
 } from "../errors.js";
-import type { ChatRequest, ChatStreamChunk, ChatUsage } from "../types.js";
+import type {
+  ChatMessage,
+  ChatRequest,
+  ChatStreamChunk,
+  ChatUsage,
+  ToolChoice,
+  ToolDef,
+} from "../types.js";
+
+/**
+ * Serialize our ChatMessage to the OpenAI wire shape. Three special cases:
+ * - role:'tool' → {role:'tool', content, tool_call_id} (the result of a prior tool call)
+ * - role:'assistant' with toolCalls → {role:'assistant', content, tool_calls:[...]} (echoing back the model's prior tool request)
+ * - everything else → {role, content}
+ */
+function toOpenAIMessage(msg: ChatMessage): unknown {
+  if (msg.role === "tool") {
+    return {
+      role: "tool",
+      content: msg.content,
+      ...(msg.toolCallId ? { tool_call_id: msg.toolCallId } : {}),
+    };
+  }
+  if (msg.role === "assistant" && msg.toolCalls && msg.toolCalls.length > 0) {
+    return {
+      role: "assistant",
+      content: msg.content || null,
+      tool_calls: msg.toolCalls.map((tc) => ({
+        id: tc.id,
+        type: "function",
+        function: { name: tc.name, arguments: JSON.stringify(tc.input ?? {}) },
+      })),
+    };
+  }
+  const base: Record<string, unknown> = { role: msg.role, content: msg.content };
+  if (msg.name) base.name = msg.name;
+  return base;
+}
+
+/** Build the OpenAI tools array from provider-agnostic ToolDefs. */
+function toOpenAITools(tools: ToolDef[]): unknown[] {
+  return tools.map((t) => ({
+    type: "function",
+    function: {
+      name: t.name,
+      ...(t.description ? { description: t.description } : {}),
+      parameters: t.parameters ?? { type: "object", properties: {} },
+    },
+  }));
+}
+
+/** Build OpenAI tool_choice from the provider-agnostic directive. */
+function toOpenAIToolChoice(choice: ToolChoice): unknown {
+  if (choice === "auto") return "auto";
+  if (choice === "none") return "none";
+  return { type: "function", function: { name: choice.name } };
+}
 
 // Builds the OpenAI-compatible /chat/completions request body shared by every
 // provider that speaks this dialect (OpenRouter, Cloudflare AI v1, etc.).
 export function buildChatBody(request: ChatRequest & { model: string }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: request.model,
-    messages: request.messages,
+    messages: request.messages.map(toOpenAIMessage),
     stream: request.stream ?? false,
   };
 
@@ -22,6 +78,11 @@ export function buildChatBody(request: ChatRequest & { model: string }): Record<
 
   if (request.maxTokens !== undefined) {
     body.max_tokens = request.maxTokens;
+  }
+
+  if (request.tools && request.tools.length > 0) {
+    body.tools = toOpenAITools(request.tools);
+    body.tool_choice = toOpenAIToolChoice(request.toolChoice ?? "auto");
   }
 
   return body;

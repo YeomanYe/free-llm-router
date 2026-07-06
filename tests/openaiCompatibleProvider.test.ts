@@ -75,4 +75,96 @@ describe("OpenAICompatibleProvider", () => {
       }),
     );
   });
+
+  it("chat forwards tools/tool_choice and parses toolCalls + stopReason", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        id: "chatcmpl-2",
+        model: "gpt-test",
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            content: null,
+            tool_calls: [{
+              id: "call_1",
+              type: "function",
+              function: { name: "search", arguments: '{"q":"router"}' },
+            }],
+          },
+        }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new OpenAICompatibleProvider({
+      name: "test",
+      baseUrl: "https://example.test/v1",
+      apiKey: "sk-test",
+    });
+
+    const res = await provider.chat({
+      model: "gpt-test",
+      messages: [{ role: "user", content: "find router" }],
+      tools: [{ name: "search", description: "web search", parameters: { type: "object", properties: { q: { type: "string" } } } }],
+      toolChoice: "auto",
+    });
+
+    expect(res.content).toBe("");
+    expect(res.toolCalls).toEqual([{ id: "call_1", name: "search", input: { q: "router" } }]);
+    expect(res.stopReason).toBe("tool_use");
+
+    const callBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(callBody.tools).toEqual([{
+      type: "function",
+      function: {
+        name: "search",
+        description: "web search",
+        parameters: { type: "object", properties: { q: { type: "string" } } },
+      },
+    }]);
+    expect(callBody.tool_choice).toBe("auto");
+  });
+
+  it("chat serializes assistant toolCalls + tool-result messages for multi-turn", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        id: "chatcmpl-3",
+        model: "gpt-test",
+        choices: [{ finish_reason: "stop", message: { content: "all done" } }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new OpenAICompatibleProvider({
+      name: "test",
+      baseUrl: "https://example.test/v1",
+      apiKey: "sk-test",
+    });
+
+    await provider.chat({
+      model: "gpt-test",
+      messages: [
+        { role: "user", content: "search and summarize" },
+        { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "search", input: { q: "x" } }] },
+        { role: "tool", content: "result text", toolCallId: "call_1" },
+      ],
+      tools: [{ name: "search", parameters: { type: "object" } }],
+    });
+
+    const callBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(callBody.messages[1]).toEqual({
+      role: "assistant",
+      content: null,
+      tool_calls: [{
+        id: "call_1",
+        type: "function",
+        function: { name: "search", arguments: '{"q":"x"}' },
+      }],
+    });
+    expect(callBody.messages[2]).toEqual({
+      role: "tool",
+      content: "result text",
+      tool_call_id: "call_1",
+    });
+  });
 });

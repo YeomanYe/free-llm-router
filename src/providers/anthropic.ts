@@ -4,12 +4,17 @@ import {
   TimeoutError,
 } from "../errors.js";
 import type {
+  ChatMessage,
   ChatRequest,
   ChatResponse,
   DiscoveredModel,
   ObjectRequest,
   ObjectResponse,
   ProviderAdapter,
+  StopReason,
+  ToolCall,
+  ToolChoice,
+  ToolDef,
 } from "../types.js";
 
 export interface AnthropicStaticModel {
@@ -51,6 +56,78 @@ function splitSystem(messages: ChatRequest["messages"]): {
     ...(system.length > 0 ? { system: system.join("\n\n") } : {}),
     messages: messages.slice(i),
   };
+}
+
+/**
+ * Convert our ChatMessage into Anthropic's wire shape.
+ * - role:'tool' → a user message with a tool_result content block (answers a prior tool_use)
+ * - role:'assistant' with toolCalls → content array mixing text + tool_use blocks
+ * - everything else → plain {role, content}
+ */
+function toAnthropicMessage(msg: ChatMessage): unknown {
+  if (msg.role === "tool") {
+    return {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: msg.toolCallId,
+          content: msg.content,
+        },
+      ],
+    };
+  }
+  if (msg.role === "assistant" && msg.toolCalls && msg.toolCalls.length > 0) {
+    const blocks: unknown[] = [];
+    if (msg.content) blocks.push({ type: "text", text: msg.content });
+    for (const tc of msg.toolCalls) {
+      blocks.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input ?? {} });
+    }
+    return { role: "assistant", content: blocks };
+  }
+  return { role: msg.role, content: msg.content };
+}
+
+/** Build the Anthropic `tools` array from provider-agnostic ToolDefs. */
+function toAnthropicTools(tools: ToolDef[]): unknown[] {
+  return tools.map((t) => ({
+    name: t.name,
+    ...(t.description ? { description: t.description } : {}),
+    input_schema: t.parameters ?? { type: "object", properties: {} },
+  }));
+}
+
+/** Build Anthropic `tool_choice` from the provider-agnostic directive. */
+function toAnthropicToolChoice(choice: ToolChoice): unknown {
+  if (choice === "auto") return { type: "auto" };
+  if (choice === "none") return { type: "none" };
+  return { type: "tool", name: choice.name };
+}
+
+/** Map Anthropic `stop_reason` to the normalized StopReason. */
+function fromAnthropicStopReason(value: string | undefined): StopReason {
+  switch (value) {
+    case "tool_use":
+      return "tool_use";
+    case "end_turn":
+      return "end_turn";
+    case "max_tokens":
+      return "max_tokens";
+    case "stop_sequence":
+      return "stop_sequence";
+    default:
+      return "other";
+  }
+}
+
+/** Pull tool_use blocks out of the Anthropic content array into ToolCall[]. */
+function extractToolCalls(
+  content: Array<{ type: string; id?: string; name?: string; input?: unknown }> | undefined,
+): ToolCall[] {
+  if (!content) return [];
+  return content
+    .filter((b) => b.type === "tool_use" && typeof b.id === "string")
+    .map((b) => ({ id: b.id as string, name: b.name ?? "", input: b.input }));
 }
 
 export class AnthropicMessagesProvider implements ProviderAdapter {
@@ -134,24 +211,33 @@ export class AnthropicMessagesProvider implements ProviderAdapter {
     const body: Record<string, unknown> = {
       model: request.model,
       max_tokens: request.maxTokens ?? 1024,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: messages.map(toAnthropicMessage),
       ...(system ? { system } : {}),
     };
+    if (request.tools && request.tools.length > 0) {
+      body.tools = toAnthropicTools(request.tools);
+      body.tool_choice = toAnthropicToolChoice(request.toolChoice ?? "auto");
+    }
     const data = (await this.request("/v1/messages", body, request.timeoutMs)) as {
       id: string;
       model: string;
-      content?: Array<{ type: string; text?: string }>;
+      stop_reason?: string;
+      content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
       usage?: { input_tokens: number; output_tokens: number };
     };
     const content = (data.content ?? [])
+      .filter((b) => b.type === "text")
       .map((b) => b.text ?? "")
       .join("");
+    const toolCalls = extractToolCalls(data.content);
     return {
       id: data.id,
       model: data.model,
       provider: this.name,
       content,
       raw: data,
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      ...(data.stop_reason ? { stopReason: fromAnthropicStopReason(data.stop_reason) } : {}),
       ...(data.usage
         ? {
             usage: {

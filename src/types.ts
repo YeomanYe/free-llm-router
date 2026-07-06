@@ -29,14 +29,69 @@ export interface ChatMessage {
   role: ChatRole;
   content: string;
   name?: string;
+  /**
+   * Tool-result messages only: the id this result answers.
+   * Anthropic `tool_use_id` / OpenAI `tool_call_id`. Ignored for non-tool roles.
+   */
+  toolCallId?: string;
+  /**
+   * Assistant messages only (when echoing back a prior model response that
+   * requested tools). Providers serialize this into their native assistant
+   * tool-call shape (Anthropic tool_use content blocks / OpenAI tool_calls).
+   * Source: copy verbatim from the prior ChatResponse.toolCalls.
+   */
+  toolCalls?: ToolCall[];
 }
 
 export type SortDimension = "quality" | "context" | "speed" | "cost";
+
+/**
+ * Tool definition passed in ChatRequest.tools. Provider-agnostic:
+ * - Anthropic maps `parameters` → `input_schema`
+ * - OpenAI-compatible maps `parameters` → `function.parameters`
+ * `parameters` is a JSON Schema object (callers build it; for Zod callers
+ * see the zod-to-json-schema adapter in the upper layer).
+ */
+export interface ToolDef {
+  name: string;
+  description?: string;
+  /** JSON Schema describing the tool's input shape. */
+  parameters?: Record<string, unknown>;
+}
+
+/**
+ * A tool invocation the model wants the caller to execute.
+ * `id` must be echoed back as `toolCallId` in the follow-up `role: "tool"` message.
+ */
+export interface ToolCall {
+  id: string;
+  name: string;
+  /** Parsed tool input (already JSON-decoded by the provider). */
+  input: unknown;
+}
+
+/**
+ * Normalized stop reason across providers.
+ * - `tool_use`: model requested tool execution; caller should run tools and continue
+ * - `end_turn`: model finished naturally (terminal)
+ * - `max_tokens`: hit output cap (terminal unless caller raises the cap)
+ * - `stop_sequence`: hit a stop sequence (terminal)
+ * - `other`: provider-specific or unrecognized (treat as terminal)
+ */
+export type StopReason = "tool_use" | "end_turn" | "max_tokens" | "stop_sequence" | "other";
+
+/**
+ * Tool-choice directive. `'auto'` lets the model decide; `'none'` forbids tools;
+ * `{type:'tool', name}` forces a specific tool.
+ */
+export type ToolChoice = "auto" | "none" | { type: "tool"; name: string };
 
 export interface ChatRequest {
   model?: string;
   models?: string[];
   providers?: string[];
+  /** 排除这些 provider(黑名单,优先于 providers 白名单)。用于内容验收失败后强制轮转。 */
+  excludeProviders?: string[];
   // When true the explicit model/models/providers list is treated as a
   // preferred prefix and the router falls through to the tier-filtered pool
   // instead of hard-failing when the whole list errors out.
@@ -60,6 +115,14 @@ export interface ChatRequest {
   timeoutMs?: number;
   // Optional external abort signal. Cancels the in-flight request when aborted.
   signal?: AbortSignal;
+  /**
+   * Tools the model may call. When present (and toolChoice !== 'none'),
+   * providers forward them to the model; the response's `toolCalls` lists
+   * invocations the caller must execute and echo back via role:'tool' messages.
+   */
+  tools?: ToolDef[];
+  /** Controls whether/how tools are chosen. Default 'auto' when tools present. */
+  toolChoice?: ToolChoice;
 }
 
 export interface ChatUsage {
@@ -75,6 +138,17 @@ export interface ChatResponse {
   content: string;
   raw: unknown;
   usage?: ChatUsage;
+  /**
+   * Tool invocations the model requested (only populated when the request
+   * carried `tools` and the model chose to call one). Empty/undefined means
+   * the model produced a terminal text response.
+   */
+  toolCalls?: ToolCall[];
+  /**
+   * Why the model stopped generating. `tool_use` means the caller should run
+   * the tools and continue; anything else is terminal.
+   */
+  stopReason?: StopReason;
 }
 
 export interface ObjectRequest extends ChatRequest {

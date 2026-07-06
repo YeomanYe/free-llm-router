@@ -176,4 +176,97 @@ describe("AnthropicMessagesProvider", () => {
     expect(models[0].id).toBe("claude-sonnet-4-6");
     expect(models[0].provider).toBe("anthropic");
   });
+
+  it("chat forwards tools + tool_choice and parses toolCalls/stopReason", async () => {
+    let captured: RequestInit | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        captured = init;
+        return anthropicRes({
+          id: "msg_t",
+          model: "claude-sonnet-4-6",
+          stop_reason: "tool_use",
+          content: [
+            { type: "text", text: "thinking..." },
+            { type: "tool_use", id: "tu_1", name: "web_search", input: { query: "llm-router" } },
+          ],
+          usage: { input_tokens: 5, output_tokens: 3 },
+        });
+      }),
+    );
+    const p = new AnthropicMessagesProvider(opts);
+    const res = await p.chat({
+      model: "claude-sonnet-4-6",
+      messages: [{ role: "user", content: "search llm-router" }],
+      maxTokens: 100,
+      tools: [{ name: "web_search", description: "search the web", parameters: { type: "object", properties: { query: { type: "string" } } } }],
+      toolChoice: "auto",
+    });
+    const body = JSON.parse((captured as RequestInit).body as string);
+    expect(body.tools).toEqual([
+      {
+        name: "web_search",
+        description: "search the web",
+        input_schema: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ]);
+    expect(body.tool_choice).toEqual({ type: "auto" });
+    // text content extracted, tool_use blocks not jammed into content string
+    expect(res.content).toBe("thinking...");
+    expect(res.toolCalls).toEqual([{ id: "tu_1", name: "web_search", input: { query: "llm-router" } }]);
+    expect(res.stopReason).toBe("tool_use");
+  });
+
+  it("chat serializes assistant toolCalls + tool-result messages for multi-turn", async () => {
+    let captured: RequestInit | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        captured = init;
+        return anthropicRes({
+          id: "msg_final",
+          model: "claude-sonnet-4-6",
+          stop_reason: "end_turn",
+          content: [{ type: "text", text: "done" }],
+        });
+      }),
+    );
+    const p = new AnthropicMessagesProvider(opts);
+    await p.chat({
+      model: "claude-sonnet-4-6",
+      messages: [
+        { role: "user", content: "search and summarize" },
+        // assistant echoing back its prior tool request
+        { role: "assistant", content: "", toolCalls: [{ id: "tu_1", name: "web_search", input: { query: "x" } }] },
+        // tool result answering tu_1
+        { role: "tool", content: "result text", toolCallId: "tu_1" },
+      ],
+      maxTokens: 100,
+      tools: [{ name: "web_search", parameters: { type: "object" } }],
+    });
+    const body = JSON.parse((captured as RequestInit).body as string);
+    // assistant message carries tool_use content block
+    expect(body.messages[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "tool_use", id: "tu_1", name: "web_search", input: { query: "x" } }],
+    });
+    // tool result becomes a user message with tool_result content block
+    expect(body.messages[2]).toEqual({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "tu_1", content: "result text" }],
+    });
+  });
+
+  it("chat maps unknown stop_reason to 'other'", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        anthropicRes({ id: "1", model: "m", stop_reason: "refusal", content: [{ type: "text", text: "no" }] }),
+      ),
+    );
+    const p = new AnthropicMessagesProvider(opts);
+    const res = await p.chat({ model: "claude-sonnet-4-6", messages: [{ role: "user", content: "x" }], maxTokens: 5 });
+    expect(res.stopReason).toBe("other");
+  });
 });

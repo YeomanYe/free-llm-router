@@ -462,7 +462,9 @@ export class ModelRouter {
 
   private async selectCandidates(request: ChatRequest): Promise<Candidate[]> {
     const candidates = await this.getCandidates(false);
+    const exclude = new Set(request.excludeProviders ?? []);
     const tiered = candidates.filter((candidate) => {
+      if (exclude.size > 0 && exclude.has(candidate.provider.name)) return false;
       if (request.tier && candidate.model.tier !== request.tier) return false;
       return this.fallbackTiers.includes(candidate.model.tier ?? "low-3");
     });
