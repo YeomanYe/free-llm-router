@@ -10,11 +10,8 @@ describe("OpenAICompatibleProvider", () => {
   it("discovers models from a standard /models response", async () => {
     const fetchMock = vi.fn(async () =>
       Response.json({
-        data: [
-          { id: "meta-llama/llama-3.3-70b-instruct:free" },
-          { id: "paid/model" }
-        ]
-      })
+        data: [{ id: "meta-llama/llama-3.3-70b-instruct:free" }, { id: "paid/model" }],
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -22,7 +19,7 @@ describe("OpenAICompatibleProvider", () => {
       name: "openrouter",
       baseUrl: "https://openrouter.ai/api/v1",
       apiKey: "sk-test",
-      freeModelPatterns: [":free"]
+      freeModelPatterns: [":free"],
     });
 
     const models = await provider.listModels();
@@ -30,17 +27,17 @@ describe("OpenAICompatibleProvider", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://openrouter.ai/api/v1/models",
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer sk-test" })
-      })
+        headers: expect.objectContaining({ Authorization: "Bearer sk-test" }),
+      }),
     );
     expect(models).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "meta-llama/llama-3.3-70b-instruct:free",
-          free: true
+          free: true,
         }),
-        expect.objectContaining({ id: "paid/model", free: false })
-      ])
+        expect.objectContaining({ id: "paid/model", free: false }),
+      ]),
     );
   });
 
@@ -49,20 +46,20 @@ describe("OpenAICompatibleProvider", () => {
       Response.json({
         id: "chatcmpl-1",
         model: "test-model",
-        choices: [{ message: { content: "hello" } }]
-      })
+        choices: [{ message: { content: "hello" } }],
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = new OpenAICompatibleProvider({
       name: "test",
       baseUrl: "https://example.test/v1",
-      apiKey: "sk-test"
+      apiKey: "sk-test",
     });
 
     const response = await provider.chat({
       model: "test-model",
-      messages: [{ role: "user", content: "hi" }]
+      messages: [{ role: "user", content: "hi" }],
     });
 
     expect(response.content).toBe("hello");
@@ -73,9 +70,9 @@ describe("OpenAICompatibleProvider", () => {
         body: JSON.stringify({
           model: "test-model",
           messages: [{ role: "user", content: "hi" }],
-          stream: false
-        })
-      })
+          stream: false,
+        }),
+      }),
     );
   });
 });

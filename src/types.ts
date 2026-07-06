@@ -18,8 +18,10 @@ export const MODEL_TIERS: readonly ModelTier[] = [
   "medium-3",
   "low-1",
   "low-2",
-  "low-3"
+  "low-3",
 ];
+
+export const MODEL_TIER_NAMES = MODEL_TIERS as readonly string[];
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
 
@@ -50,7 +52,14 @@ export interface ChatRequest {
   messages: ChatMessage[];
   temperature?: number;
   maxTokens?: number;
-  stream?: false;
+  // Streaming is opt-in. When true the provider yields incremental content
+  // chunks; when false (default) the provider returns one buffered response.
+  stream?: boolean;
+  // Per-request timeout. Providers must abort the underlying fetch when it
+  // elapses, surfacing a retryable TimeoutError.
+  timeoutMs?: number;
+  // Optional external abort signal. Cancels the in-flight request when aborted.
+  signal?: AbortSignal;
 }
 
 export interface ChatUsage {
@@ -92,15 +101,31 @@ export interface ChatAllResult {
   error?: Error;
 }
 
+// A single delta yielded by a streaming chat call. `content` is the
+// incremental text since the previous chunk; `done` marks the final yield.
+// `provider`/`model` identify the serving candidate and are populated on at
+// least the first chunk so consumers can label output without bookkeeping.
+export interface ChatStreamChunk {
+  content: string;
+  done: boolean;
+  provider?: string;
+  model?: string;
+  usage?: ChatUsage;
+}
+
 // Rolling counters kept per provider (or provider/model when queried in that mode).
 // Requests counts every provider.chat() attempt including retries, so it aligns
 // with what the provider actually bills. Latency is a simple running average
-// over successful calls only; cooldownUntil is set when the provider throws a
-// retryable error (rate limits, 5xx) and cleared on the next successful call.
+// over successful calls only; cooldownUntil is set once a model accumulates
+// `consecutiveErrors` >= the router's configured threshold (rate limits, 5xx)
+// and is cleared on the next successful call.
 export interface UsageStats {
   requests: number;
   successes: number;
   errors: number;
+  // Consecutive failures since the last success — drives the cooldown gate
+  // so a single transient 5xx doesn't yank a healthy model offline.
+  consecutiveErrors: number;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -151,6 +176,9 @@ export interface ProviderAdapter {
   readonly kind: string;
   listModels(): Promise<DiscoveredModel[]>;
   chat(request: ChatRequest & { model: string }): Promise<ChatResponse>;
+  // Optional streaming chat. Providers that don't support SSE may leave this
+  // undefined; the router falls back to buffered chat for them.
+  streamChat?(request: ChatRequest & { model: string }): AsyncIterable<ChatStreamChunk>;
   // Optional structured output. Providers that can enforce a JSON Schema
   // (Anthropic tool-use, OpenAI tool-calling) implement this; others leave it
   // undefined and the router skips them for object() calls.
@@ -172,4 +200,14 @@ export interface RouterOptions {
   fallback?: Partial<FallbackPolicy>;
   freeOnly?: boolean;
   cooldownMs?: number;
+  // How many consecutive failures before a model enters cooldown. Default 2 —
+  // one transient blip shouldn't disable a model, but two in a row probably
+  // means the upstream is genuinely degraded.
+  cooldownThreshold?: number;
+  // Default per-request timeout applied to every provider.chat / streamChat
+  // call that doesn't set its own timeoutMs. Undefined = no timeout.
+  timeoutMs?: number;
+  // TTL for the discovered-model catalog cache, in ms. Default 5 minutes.
+  // Pass 0 to disable caching entirely (re-discover on every call).
+  catalogTtlMs?: number;
 }

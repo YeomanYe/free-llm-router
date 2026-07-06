@@ -1,17 +1,19 @@
 import { readFile } from "node:fs/promises";
 
 import { z } from "zod";
-
-import { ModelRouter } from "./router.js";
 import { CloudflareWorkersAIProvider } from "./providers/cloudflare.js";
 import { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
+import { ModelRouter } from "./router.js";
 import type { ProviderAdapter, RouterOptions } from "./types.js";
+import { MODEL_TIERS, type ModelTier } from "./types.js";
+
+const tierEnum = z.enum(MODEL_TIERS as [ModelTier, ...ModelTier[]]);
 
 const staticModelSchema = z.object({
   id: z.string(),
   free: z.boolean().optional(),
   contextWindow: z.number().int().positive().optional(),
-  qualityScore: z.number().min(0).max(1).optional()
+  qualityScore: z.number().min(0).max(1).optional(),
 });
 
 const openAICompatibleProviderSchema = z.object({
@@ -22,7 +24,8 @@ const openAICompatibleProviderSchema = z.object({
   headers: z.record(z.string()).optional(),
   freeModelPatterns: z.array(z.string()).optional(),
   staticModels: z.array(staticModelSchema).optional(),
-  discoverModels: z.boolean().optional()
+  discoverModels: z.boolean().optional(),
+  timeoutMs: z.number().int().positive().optional(),
 });
 
 const cloudflareProviderSchema = z.object({
@@ -30,12 +33,13 @@ const cloudflareProviderSchema = z.object({
   name: z.string().optional(),
   accountId: z.string().optional(),
   apiToken: z.string(),
-  staticModels: z.array(staticModelSchema).optional()
+  staticModels: z.array(staticModelSchema).optional(),
+  timeoutMs: z.number().int().positive().optional(),
 });
 
 const providerSchema = z.discriminatedUnion("type", [
   openAICompatibleProviderSchema,
-  cloudflareProviderSchema
+  cloudflareProviderSchema,
 ]);
 
 const configSchema = z.object({
@@ -43,29 +47,19 @@ const configSchema = z.object({
   retry: z
     .object({
       maxRetries: z.number().int().min(0).optional(),
-      baseDelayMs: z.number().int().min(0).optional()
+      baseDelayMs: z.number().int().min(0).optional(),
     })
     .optional(),
   fallback: z
     .object({
-      tiers: z
-        .array(
-          z.enum([
-            "high-1",
-            "high-2",
-            "high-3",
-            "medium-1",
-            "medium-2",
-            "medium-3",
-            "low-1",
-            "low-2",
-            "low-3"
-          ])
-        )
-        .optional()
+      tiers: z.array(tierEnum).optional(),
     })
     .optional(),
-  providers: z.array(providerSchema).min(1)
+  cooldownMs: z.number().int().positive().optional(),
+  cooldownThreshold: z.number().int().min(1).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  catalogTtlMs: z.number().int().min(0).optional(),
+  providers: z.array(providerSchema).min(1),
 });
 
 export type RouterConfig = z.infer<typeof configSchema>;
@@ -81,29 +75,33 @@ export function createRouterFromConfig(input: unknown): ModelRouter {
     if (provider.type === "openai-compatible") {
       const apiKeys = resolveSecretList(provider.apiKey);
       const variants = apiKeys.length > 0 ? apiKeys : [undefined];
-      return variants.map((apiKey, index) =>
-        new OpenAICompatibleProvider({
-          name: instanceName(provider.name, index),
-          baseUrl: provider.baseUrl,
-          apiKey,
-          headers: provider.headers,
-          freeModelPatterns: provider.freeModelPatterns,
-          staticModels: provider.staticModels,
-          discoverModels: provider.discoverModels
-        })
+      return variants.map(
+        (apiKey, index) =>
+          new OpenAICompatibleProvider({
+            name: instanceName(provider.name, index),
+            baseUrl: provider.baseUrl,
+            apiKey,
+            headers: provider.headers,
+            freeModelPatterns: provider.freeModelPatterns,
+            staticModels: provider.staticModels,
+            discoverModels: provider.discoverModels,
+            timeoutMs: provider.timeoutMs,
+          }),
       );
     }
 
     const accountId = resolveOptionalSecret(provider.accountId);
     const apiTokens = resolveSecretList(provider.apiToken);
     const baseName = provider.name ?? "cloudflare";
-    return apiTokens.map((apiToken, index) =>
-      new CloudflareWorkersAIProvider({
-        name: instanceName(baseName, index),
-        accountId,
-        apiToken,
-        staticModels: provider.staticModels
-      })
+    return apiTokens.map(
+      (apiToken, index) =>
+        new CloudflareWorkersAIProvider({
+          name: instanceName(baseName, index),
+          accountId,
+          apiToken,
+          staticModels: provider.staticModels,
+          timeoutMs: provider.timeoutMs,
+        }),
     );
   });
 
@@ -111,7 +109,11 @@ export function createRouterFromConfig(input: unknown): ModelRouter {
     providers,
     freeOnly: config.freeOnly,
     retry: config.retry,
-    fallback: config.fallback
+    fallback: config.fallback,
+    cooldownMs: config.cooldownMs,
+    cooldownThreshold: config.cooldownThreshold,
+    timeoutMs: config.timeoutMs,
+    catalogTtlMs: config.catalogTtlMs,
   };
 
   return new ModelRouter(options);
@@ -135,6 +137,11 @@ function resolveSecret(value: string | undefined): string | undefined {
 
   return resolved;
 }
+
+// Kept for API symmetry with resolveOptionalSecret; resolveSecretList handles
+// every code path used by config today, but this stays exported for callers
+// that resolve a single secret directly.
+export { resolveSecret };
 
 function resolveOptionalSecret(value: string | undefined): string | undefined {
   if (value === undefined) {

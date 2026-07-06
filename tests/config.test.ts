@@ -20,9 +20,9 @@ describe("createRouterFromConfig", () => {
               id: "meta-llama/llama-3.3-70b-instruct:free",
               free: true,
               qualityScore: 0.82,
-              contextWindow: 128000
-            }
-          ]
+              contextWindow: 128000,
+            },
+          ],
         },
         {
           type: "cloudflare-workers-ai",
@@ -33,11 +33,11 @@ describe("createRouterFromConfig", () => {
               id: "@cf/meta/llama-3.1-8b-instruct",
               free: true,
               qualityScore: 0.55,
-              contextWindow: 8192
-            }
-          ]
-        }
-      ]
+              contextWindow: 8192,
+            },
+          ],
+        },
+      ],
     });
 
     const models = await router.listModels();
@@ -45,8 +45,8 @@ describe("createRouterFromConfig", () => {
     expect(models).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ provider: "openrouter" }),
-        expect.objectContaining({ provider: "cloudflare" })
-      ])
+        expect.objectContaining({ provider: "cloudflare" }),
+      ]),
     );
   });
 
@@ -68,11 +68,11 @@ describe("createRouterFromConfig", () => {
               id: "meta-llama/llama-3.3-70b-instruct:free",
               free: true,
               qualityScore: 0.82,
-              contextWindow: 128000
-            }
-          ]
-        }
-      ]
+              contextWindow: 128000,
+            },
+          ],
+        },
+      ],
     });
 
     const models = await router.listModels();
@@ -93,10 +93,10 @@ describe("createRouterFromConfig", () => {
             baseUrl: "https://example.com/v1",
             apiKey: "env/TEST_MISSING_KEY",
             discoverModels: false,
-            staticModels: [{ id: "m", free: true }]
-          }
-        ]
-      })
+            staticModels: [{ id: "m", free: true }],
+          },
+        ],
+      }),
     ).toThrow(/TEST_MISSING_KEY/);
   });
 });

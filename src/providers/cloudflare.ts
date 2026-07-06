@@ -1,9 +1,19 @@
+import type {
+  ChatRequest,
+  ChatResponse,
+  ChatStreamChunk,
+  DiscoveredModel,
+  ProviderAdapter,
+} from "../types.js";
 import {
-  ProviderError,
-  RetryableProviderError,
-  isRetryableStatus
-} from "../errors.js";
-import type { ChatRequest, ChatResponse, DiscoveredModel, ProviderAdapter } from "../types.js";
+  buildChatBody,
+  classifyAbort,
+  composeAbortSignal,
+  errorFromResponse,
+  extractOpenAIContent,
+  normalizeUsage,
+  parseOpenAIStream,
+} from "./openaiShared.js";
 
 export interface CloudflareStaticModelConfig {
   id: string;
@@ -17,7 +27,10 @@ export interface CloudflareWorkersAIProviderOptions {
   apiToken: string;
   name?: string;
   staticModels?: CloudflareStaticModelConfig[];
+  timeoutMs?: number;
 }
+
+const CF_API_BASE = "https://api.cloudflare.com/client/v4";
 
 export class CloudflareWorkersAIProvider implements ProviderAdapter {
   readonly kind = "cloudflare-workers-ai";
@@ -28,12 +41,15 @@ export class CloudflareWorkersAIProvider implements ProviderAdapter {
 
   private readonly staticModels: CloudflareStaticModelConfig[];
 
+  private readonly defaultTimeoutMs?: number;
+
   private accountIdPromise?: Promise<string>;
 
   constructor(options: CloudflareWorkersAIProviderOptions) {
     this.name = options.name ?? "cloudflare";
     this.apiToken = options.apiToken;
     this.staticModels = options.staticModels ?? [];
+    this.defaultTimeoutMs = options.timeoutMs;
     if (options.accountId) {
       this.accountIdPromise = Promise.resolve(options.accountId);
     }
@@ -48,44 +64,20 @@ export class CloudflareWorkersAIProvider implements ProviderAdapter {
       source: "static",
       capabilities: { chat: true },
       contextWindow: model.contextWindow,
-      qualityScore: model.qualityScore
+      qualityScore: model.qualityScore,
     }));
   }
 
   async chat(request: ChatRequest & { model: string }): Promise<ChatResponse> {
-    const body: Record<string, unknown> = {
-      model: request.model,
-      messages: request.messages,
-      stream: request.stream ?? false
+    const timeoutMs = request.timeoutMs ?? this.defaultTimeoutMs;
+    const response = await this.postCompletion(request, false, timeoutMs);
+
+    const payload = (await response.json()) as {
+      id?: string;
+      model?: string;
+      choices?: Array<{ message?: { content?: unknown } }>;
+      usage?: unknown;
     };
-
-    if (request.temperature !== undefined) {
-      body.temperature = request.temperature;
-    }
-
-    if (request.maxTokens !== undefined) {
-      body.max_tokens = request.maxTokens;
-    }
-
-    const accountId = await this.resolveAccountId();
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiToken}`,
-          "Content-Type": "application/json",
-          Accept: "application/json"
-        },
-        body: JSON.stringify(body)
-      }
-    );
-
-    if (!response.ok) {
-      throw this.errorFromResponse(response, "Cloudflare chat completion failed");
-    }
-
-    const payload = await response.json();
     const content = extractOpenAIContent(payload);
 
     return {
@@ -94,18 +86,51 @@ export class CloudflareWorkersAIProvider implements ProviderAdapter {
       provider: this.name,
       content,
       raw: payload,
-      usage: normalizeUsage(payload.usage)
+      usage: normalizeUsage(payload.usage),
     };
   }
 
-  private errorFromResponse(response: Response, message: string): ProviderError {
-    const ErrorClass = isRetryableStatus(response.status) ? RetryableProviderError : ProviderError;
-    return new ErrorClass(this.name, `${message}: HTTP ${response.status}`, response.status);
+  async *streamChat(request: ChatRequest & { model: string }): AsyncGenerator<ChatStreamChunk> {
+    const timeoutMs = request.timeoutMs ?? this.defaultTimeoutMs;
+    const response = await this.postCompletion(request, true, timeoutMs);
+    yield* parseOpenAIStream(response);
+  }
+
+  private async postCompletion(
+    request: ChatRequest & { model: string },
+    stream: boolean,
+    timeoutMs: number | undefined,
+  ): Promise<Response> {
+    const body = buildChatBody({ ...request, stream });
+    const accountId = await this.resolveAccountId();
+    let response: Response;
+    try {
+      response = await fetch(`${CF_API_BASE}/accounts/${accountId}/ai/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: composeAbortSignal(request.signal, timeoutMs),
+      });
+    } catch (error) {
+      throw classifyAbort(this.name, error, timeoutMs);
+    }
+
+    if (!response.ok) {
+      throw errorFromResponse(this.name, response, "Cloudflare chat completion failed");
+    }
+
+    return response;
   }
 
   private resolveAccountId(): Promise<string> {
     if (!this.accountIdPromise) {
       this.accountIdPromise = this.discoverAccountId().catch((error) => {
+        // Allow a retry on the next call — a transient failure shouldn't
+        // permanently poison the cached promise.
         this.accountIdPromise = undefined;
         throw error;
       });
@@ -114,55 +139,28 @@ export class CloudflareWorkersAIProvider implements ProviderAdapter {
   }
 
   private async discoverAccountId(): Promise<string> {
-    const response = await fetch("https://api.cloudflare.com/client/v4/accounts", {
-      headers: {
-        Authorization: `Bearer ${this.apiToken}`,
-        Accept: "application/json"
-      }
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${CF_API_BASE}/accounts`, {
+        headers: {
+          Authorization: `Bearer ${this.apiToken}`,
+          Accept: "application/json",
+        },
+        signal: composeAbortSignal(undefined, this.defaultTimeoutMs),
+      });
+    } catch (error) {
+      throw classifyAbort(this.name, error, this.defaultTimeoutMs);
+    }
 
     if (!response.ok) {
-      throw this.errorFromResponse(response, "Failed to discover Cloudflare account id");
+      throw errorFromResponse(this.name, response, "Failed to discover Cloudflare account id");
     }
 
     const payload = (await response.json()) as { result?: Array<{ id?: unknown }> };
     const first = payload.result?.[0]?.id;
     if (typeof first !== "string" || first.length === 0) {
-      throw new ProviderError(this.name, "Cloudflare API returned no accounts for this token");
+      throw new Error(`${this.name}: Cloudflare API returned no accounts for this token`);
     }
     return first;
   }
-}
-
-function extractOpenAIContent(payload: any): string {
-  const content = payload?.choices?.[0]?.message?.content;
-
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") {
-          return part;
-        }
-        return typeof part?.text === "string" ? part.text : "";
-      })
-      .join("");
-  }
-
-  return "";
-}
-
-function normalizeUsage(usage: any) {
-  if (!usage || typeof usage !== "object") {
-    return undefined;
-  }
-
-  return {
-    promptTokens: usage.prompt_tokens,
-    completionTokens: usage.completion_tokens,
-    totalTokens: usage.total_tokens
-  };
 }

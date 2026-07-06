@@ -53,6 +53,6 @@ export function classifyModelTier(model: DiscoveredModel): ModelTier {
 export function withTier(model: DiscoveredModel): DiscoveredModel {
   return {
     ...model,
-    tier: model.tier ?? classifyModelTier(model)
+    tier: model.tier ?? classifyModelTier(model),
   };
 }

@@ -11,7 +11,7 @@ function model(overrides: Partial<DiscoveredModel>): DiscoveredModel {
     free: true,
     source: "discovered",
     capabilities: {},
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -23,9 +23,9 @@ describe("classifyModelTier", () => {
           contextWindow: 128_000,
           capabilities: { chat: true, tools: true, vision: true },
           qualityScore: 0.9,
-          rateLimit: { rpm: 60 }
-        })
-      )
+          rateLimit: { rpm: 60 },
+        }),
+      ),
     ).toBe("high-1");
   });
 
@@ -36,9 +36,9 @@ describe("classifyModelTier", () => {
           contextWindow: 128_000,
           capabilities: { chat: true },
           qualityScore: 0.9,
-          rateLimit: { rpm: 15 }
-        })
-      )
+          rateLimit: { rpm: 15 },
+        }),
+      ),
     ).toBe("high-2");
   });
 
@@ -48,9 +48,9 @@ describe("classifyModelTier", () => {
         model({
           contextWindow: 32_000,
           capabilities: { chat: true },
-          qualityScore: 0.9
-        })
-      )
+          qualityScore: 0.9,
+        }),
+      ),
     ).toBe("high-3");
   });
 
@@ -61,9 +61,9 @@ describe("classifyModelTier", () => {
           contextWindow: 32_000,
           capabilities: { chat: true },
           qualityScore: 0.62,
-          rateLimit: { rpm: 20 }
-        })
-      )
+          rateLimit: { rpm: 20 },
+        }),
+      ),
     ).toBe("medium-1");
   });
 
@@ -73,9 +73,9 @@ describe("classifyModelTier", () => {
         model({
           contextWindow: 32_000,
           capabilities: { chat: true },
-          qualityScore: 0.62
-        })
-      )
+          qualityScore: 0.62,
+        }),
+      ),
     ).toBe("medium-2");
   });
 
@@ -86,9 +86,9 @@ describe("classifyModelTier", () => {
           contextWindow: 8_000,
           capabilities: { chat: true },
           qualityScore: 0.5,
-          rateLimit: { rpm: 15 }
-        })
-      )
+          rateLimit: { rpm: 15 },
+        }),
+      ),
     ).toBe("medium-3");
   });
 
@@ -98,9 +98,9 @@ describe("classifyModelTier", () => {
         model({
           contextWindow: 8_000,
           capabilities: { chat: true },
-          qualityScore: 0.5
-        })
-      )
+          qualityScore: 0.5,
+        }),
+      ),
     ).toBe("low-1");
   });
 
@@ -111,9 +111,9 @@ describe("classifyModelTier", () => {
           contextWindow: 4_096,
           capabilities: { chat: true },
           qualityScore: 0.35,
-          rateLimit: { rpm: 3 }
-        })
-      )
+          rateLimit: { rpm: 3 },
+        }),
+      ),
     ).toBe("low-3");
   });
 });

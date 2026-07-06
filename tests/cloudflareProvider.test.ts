@@ -12,8 +12,8 @@ describe("CloudflareWorkersAIProvider", () => {
       Response.json({
         id: "cf-chat-1",
         model: "@cf/meta/llama-3.1-8b-instruct",
-        choices: [{ message: { content: "cloudflare ok" } }]
-      })
+        choices: [{ message: { content: "cloudflare ok" } }],
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -25,14 +25,14 @@ describe("CloudflareWorkersAIProvider", () => {
           id: "@cf/meta/llama-3.1-8b-instruct",
           free: true,
           contextWindow: 8_192,
-          qualityScore: 0.55
-        }
-      ]
+          qualityScore: 0.55,
+        },
+      ],
     });
 
     const response = await provider.chat({
       model: "@cf/meta/llama-3.1-8b-instruct",
-      messages: [{ role: "user", content: "hi" }]
+      messages: [{ role: "user", content: "hi" }],
     });
 
     expect(response.content).toBe("cloudflare ok");
@@ -41,9 +41,9 @@ describe("CloudflareWorkersAIProvider", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
-          Authorization: "Bearer cf-token"
-        })
-      })
+          Authorization: "Bearer cf-token",
+        }),
+      }),
     );
   });
 
@@ -56,40 +56,40 @@ describe("CloudflareWorkersAIProvider", () => {
       return Response.json({
         id: "cf-chat-2",
         model: "@cf/meta/llama-3.1-8b-instruct",
-        choices: [{ message: { content: "discovered ok" } }]
+        choices: [{ message: { content: "discovered ok" } }],
       });
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = new CloudflareWorkersAIProvider({
       apiToken: "cf-token",
-      staticModels: [{ id: "@cf/meta/llama-3.1-8b-instruct", free: true }]
+      staticModels: [{ id: "@cf/meta/llama-3.1-8b-instruct", free: true }],
     });
 
     const first = await provider.chat({
       model: "@cf/meta/llama-3.1-8b-instruct",
-      messages: [{ role: "user", content: "hi" }]
+      messages: [{ role: "user", content: "hi" }],
     });
     const second = await provider.chat({
       model: "@cf/meta/llama-3.1-8b-instruct",
-      messages: [{ role: "user", content: "again" }]
+      messages: [{ role: "user", content: "again" }],
     });
 
     expect(first.content).toBe("discovered ok");
     expect(second.content).toBe("discovered ok");
 
     const chatCalls = fetchMock.mock.calls.filter(
-      ([url]) => typeof url === "string" && url.includes("/ai/v1/chat/completions")
+      ([url]) => typeof url === "string" && url.includes("/ai/v1/chat/completions"),
     );
     expect(chatCalls).toHaveLength(2);
     for (const [url] of chatCalls) {
       expect(url).toBe(
-        "https://api.cloudflare.com/client/v4/accounts/auto_acc/ai/v1/chat/completions"
+        "https://api.cloudflare.com/client/v4/accounts/auto_acc/ai/v1/chat/completions",
       );
     }
 
     const discoveryCalls = fetchMock.mock.calls.filter(
-      ([url]) => url === "https://api.cloudflare.com/client/v4/accounts"
+      ([url]) => url === "https://api.cloudflare.com/client/v4/accounts",
     );
     expect(discoveryCalls).toHaveLength(1);
   });

@@ -1,9 +1,19 @@
+import type {
+  ChatRequest,
+  ChatResponse,
+  ChatStreamChunk,
+  DiscoveredModel,
+  ProviderAdapter,
+} from "../types.js";
 import {
-  ProviderError,
-  RetryableProviderError,
-  isRetryableStatus
-} from "../errors.js";
-import type { ChatRequest, ChatResponse, DiscoveredModel, ProviderAdapter } from "../types.js";
+  buildChatBody,
+  classifyAbort,
+  composeAbortSignal,
+  errorFromResponse,
+  extractOpenAIContent,
+  normalizeUsage,
+  parseOpenAIStream,
+} from "./openaiShared.js";
 
 export interface StaticModelConfig {
   id: string;
@@ -20,6 +30,9 @@ export interface OpenAICompatibleProviderOptions {
   freeModelPatterns?: string[];
   staticModels?: StaticModelConfig[];
   discoverModels?: boolean;
+  // Default per-call timeout for this provider, applied when the request
+  // doesn't carry its own timeoutMs.
+  timeoutMs?: number;
 }
 
 export class OpenAICompatibleProvider implements ProviderAdapter {
@@ -39,6 +52,8 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
 
   private readonly discoverModels: boolean;
 
+  private readonly defaultTimeoutMs?: number;
+
   constructor(options: OpenAICompatibleProviderOptions) {
     this.name = options.name;
     this.baseUrl = stripTrailingSlash(options.baseUrl);
@@ -47,6 +62,7 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
     this.freeModelPatterns = options.freeModelPatterns ?? [":free", "free"];
     this.staticModels = options.staticModels ?? [];
     this.discoverModels = options.discoverModels ?? true;
+    this.defaultTimeoutMs = options.timeoutMs;
   }
 
   async listModels(): Promise<DiscoveredModel[]> {
@@ -54,23 +70,38 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
       return this.staticModels.map((model) => this.toStaticModel(model));
     }
 
-    const response = await fetch(`${this.baseUrl}/models`, {
-      headers: this.requestHeaders()
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/models`, {
+        headers: this.requestHeaders(),
+        signal: composeAbortSignal(undefined, this.defaultTimeoutMs),
+      });
+    } catch (error) {
+      // Network/timeout during discovery is non-fatal if we have static models
+      // to fall back on; otherwise propagate so the router can report it.
+      if (this.staticModels.length > 0) {
+        return this.staticModels.map((model) => this.toStaticModel(model));
+      }
+      throw classifyAbort(this.name, error, this.defaultTimeoutMs);
+    }
 
     if (!response.ok) {
       if (this.staticModels.length > 0) {
         return this.staticModels.map((model) => this.toStaticModel(model));
       }
 
-      throw this.errorFromResponse(response, "Failed to discover models");
+      throw errorFromResponse(this.name, response, "Failed to discover models");
     }
 
-    const payload = (await response.json()) as { data?: Array<{ id?: string; [key: string]: unknown }> };
+    const payload = (await response.json()) as {
+      data?: Array<{ id?: string; [key: string]: unknown }>;
+    };
     const remoteModels = payload.data ?? [];
 
     return remoteModels
-      .filter((model): model is { id: string; [key: string]: unknown } => typeof model.id === "string")
+      .filter(
+        (model): model is { id: string; [key: string]: unknown } => typeof model.id === "string",
+      )
       .map((model) => ({
         id: model.id,
         provider: this.name,
@@ -78,39 +109,20 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
         free: this.isFreeModel(model.id),
         source: "discovered" as const,
         capabilities: { chat: true },
-        raw: model
+        raw: model,
       }));
   }
 
   async chat(request: ChatRequest & { model: string }): Promise<ChatResponse> {
-    const body: Record<string, unknown> = {
-      model: request.model,
-      messages: request.messages,
-      stream: request.stream ?? false
+    const timeoutMs = request.timeoutMs ?? this.defaultTimeoutMs;
+    const response = await this.postCompletion(request, false, timeoutMs);
+
+    const payload = (await response.json()) as {
+      id?: string;
+      model?: string;
+      choices?: Array<{ message?: { content?: unknown } }>;
+      usage?: unknown;
     };
-
-    if (request.temperature !== undefined) {
-      body.temperature = request.temperature;
-    }
-
-    if (request.maxTokens !== undefined) {
-      body.max_tokens = request.maxTokens;
-    }
-
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        ...this.requestHeaders(),
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      throw this.errorFromResponse(response, "Chat completion failed");
-    }
-
-    const payload = await response.json();
     const content = extractOpenAIContent(payload);
 
     return {
@@ -119,14 +131,48 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
       provider: this.name,
       content,
       raw: payload,
-      usage: normalizeUsage(payload.usage)
+      usage: normalizeUsage(payload.usage),
     };
+  }
+
+  async *streamChat(request: ChatRequest & { model: string }): AsyncGenerator<ChatStreamChunk> {
+    const timeoutMs = request.timeoutMs ?? this.defaultTimeoutMs;
+    const response = await this.postCompletion(request, true, timeoutMs);
+    yield* parseOpenAIStream(response);
+  }
+
+  private async postCompletion(
+    request: ChatRequest & { model: string },
+    stream: boolean,
+    timeoutMs: number | undefined,
+  ): Promise<Response> {
+    const body = buildChatBody({ ...request, stream });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          ...this.requestHeaders(),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: composeAbortSignal(request.signal, timeoutMs),
+      });
+    } catch (error) {
+      throw classifyAbort(this.name, error, timeoutMs);
+    }
+
+    if (!response.ok) {
+      throw errorFromResponse(this.name, response, "Chat completion failed");
+    }
+
+    return response;
   }
 
   private requestHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
       Accept: "application/json",
-      ...this.headers
+      ...this.headers,
     };
 
     if (this.apiKey) {
@@ -150,49 +196,11 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
       source: "static",
       capabilities: { chat: true },
       contextWindow: model.contextWindow,
-      qualityScore: model.qualityScore
+      qualityScore: model.qualityScore,
     };
-  }
-
-  private errorFromResponse(response: Response, message: string): ProviderError {
-    const ErrorClass = isRetryableStatus(response.status) ? RetryableProviderError : ProviderError;
-    return new ErrorClass(this.name, `${message}: HTTP ${response.status}`, response.status);
   }
 }
 
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
-}
-
-function extractOpenAIContent(payload: any): string {
-  const content = payload?.choices?.[0]?.message?.content;
-
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") {
-          return part;
-        }
-        return typeof part?.text === "string" ? part.text : "";
-      })
-      .join("");
-  }
-
-  return "";
-}
-
-function normalizeUsage(usage: any) {
-  if (!usage || typeof usage !== "object") {
-    return undefined;
-  }
-
-  return {
-    promptTokens: usage.prompt_tokens,
-    completionTokens: usage.completion_tokens,
-    totalTokens: usage.total_tokens
-  };
 }

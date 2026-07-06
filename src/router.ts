@@ -1,17 +1,18 @@
-import { NoAvailableModelError, isRetryableError } from "./errors.js";
+import { isRetryableError, NoAvailableModelError } from "./errors.js";
 import { withTier } from "./tiering.js";
 import {
-  MODEL_TIERS,
   type ChatAllResult,
   type ChatRequest,
   type ChatResponse,
+  type ChatStreamChunk,
   type DiscoveredModel,
+  MODEL_TIERS,
   type ModelTier,
   type ProviderAdapter,
   type RetryPolicy,
   type RouterOptions,
   type SortDimension,
-  type UsageStats
+  type UsageStats,
 } from "./types.js";
 
 interface Candidate {
@@ -22,6 +23,8 @@ interface Candidate {
 export interface FanOutOptions {
   perProvider?: boolean;
 }
+
+const DEFAULT_CATALOG_TTL_MS = 5 * 60_000;
 
 // Keeps only the highest-qualityScore candidate per provider name, preserving
 // the first-seen provider order so downstream printing stays deterministic.
@@ -57,7 +60,13 @@ export class ModelRouter {
 
   private readonly freeOnly: boolean;
 
+  private readonly defaultTimeoutMs?: number;
+
   private catalogCache?: Candidate[];
+
+  private catalogCacheAt = 0;
+
+  private readonly catalogTtlMs: number;
 
   private readonly usageByProvider = new Map<string, UsageStats>();
 
@@ -65,15 +74,21 @@ export class ModelRouter {
 
   private readonly cooldownMs: number;
 
+  private readonly cooldownThreshold: number;
+
   constructor(options: RouterOptions) {
     this.providers = options.providers;
     this.retry = {
       maxRetries: options.retry?.maxRetries ?? 2,
-      baseDelayMs: options.retry?.baseDelayMs ?? 250
+      baseDelayMs: options.retry?.baseDelayMs ?? 250,
     };
     this.fallbackTiers = options.fallback?.tiers ?? [...MODEL_TIERS];
     this.freeOnly = options.freeOnly ?? true;
     this.cooldownMs = options.cooldownMs ?? 60_000;
+    this.cooldownThreshold = options.cooldownThreshold ?? 2;
+    this.defaultTimeoutMs = options.timeoutMs;
+    // 0 disables caching (re-discover every call); otherwise honour the TTL.
+    this.catalogTtlMs = options.catalogTtlMs ?? DEFAULT_CATALOG_TTL_MS;
   }
 
   async listModels(options: { refresh?: boolean } = {}): Promise<DiscoveredModel[]> {
@@ -105,6 +120,36 @@ export class ModelRouter {
     throw new NoAvailableModelError();
   }
 
+  /**
+   * Streams incremental content chunks. Tries candidates in order; on a
+   * retryable failure before any byte is yielded, falls through to the next
+   * candidate (matching chat's sequential semantics). Once the first chunk is
+   * emitted the stream is committed to that candidate — providers that don't
+   * implement streamChat transparently fall back to buffered chat.
+   */
+  async *streamChat(request: ChatRequest): AsyncGenerator<ChatStreamChunk> {
+    const candidates = await this.selectCandidates(request);
+
+    if (candidates.length === 0) {
+      throw new NoAvailableModelError();
+    }
+
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        yield* this.streamWithRetry(candidate, request);
+        return;
+      } catch (error) {
+        // If the consumer aborted, propagate immediately — no fallback.
+        if (request.signal?.aborted) throw error;
+        lastError = error;
+      }
+    }
+
+    if (lastError instanceof Error) throw lastError;
+    throw new NoAvailableModelError();
+  }
+
   async chatRace(request: ChatRequest, options?: FanOutOptions): Promise<ChatResponse> {
     const candidates = pickCandidates(await this.selectCandidates(request), options);
     if (candidates.length === 0) throw new NoAvailableModelError();
@@ -130,28 +175,116 @@ export class ModelRouter {
         } catch (error) {
           return { ...label, error: error instanceof Error ? error : new Error(String(error)) };
         }
-      })
+      }),
     );
   }
 
   private async callWithRetry(candidate: Candidate, request: ChatRequest): Promise<ChatResponse> {
+    const effectiveRequest = { ...request, timeoutMs: request.timeoutMs ?? this.defaultTimeoutMs };
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retry.maxRetries; attempt += 1) {
       const started = Date.now();
       try {
-        const response = await candidate.provider.chat({ ...request, model: candidate.model.id });
-        this.recordSuccess(candidate.provider.name, candidate.model.id, response, Date.now() - started);
+        const response = await candidate.provider.chat({
+          ...effectiveRequest,
+          model: candidate.model.id,
+        });
+        this.recordSuccess(
+          candidate.provider.name,
+          candidate.model.id,
+          response,
+          Date.now() - started,
+        );
         return response;
       } catch (error) {
         lastError = error;
-        this.recordError(candidate.provider.name, candidate.model.id, isRetryableError(error));
-        if (!isRetryableError(error)) break;
+        const retryable = isRetryableError(error);
+        this.recordError(candidate.provider.name, candidate.model.id, retryable, error);
+        if (!retryable) break;
         if (attempt < this.retry.maxRetries) {
           await sleep(this.retry.baseDelayMs * attempt);
         }
       }
     }
     throw lastError instanceof Error ? lastError : new Error("chat failed");
+  }
+
+  private async *streamWithRetry(
+    candidate: Candidate,
+    request: ChatRequest,
+  ): AsyncGenerator<ChatStreamChunk> {
+    const effectiveRequest = {
+      ...request,
+      timeoutMs: request.timeoutMs ?? this.defaultTimeoutMs,
+    };
+    const provider = candidate.provider;
+
+    // Providers without a native stream implementation get a buffered call
+    // emitted as a single chunk, so callers can always iterate uniformly.
+    if (typeof provider.streamChat !== "function") {
+      const started = Date.now();
+      const response = await provider.chat({ ...effectiveRequest, model: candidate.model.id });
+      this.recordSuccess(provider.name, candidate.model.id, response, Date.now() - started);
+      yield {
+        content: response.content,
+        done: true,
+        provider: provider.name,
+        model: candidate.model.id,
+        usage: response.usage,
+      };
+      return;
+    }
+
+    let attempt = 0;
+    const maxRetries = this.retry.maxRetries;
+    // Buffer chunks so we only commit usage stats once we know the stream
+    // either completed or failed mid-way. A failure before the first real
+    // chunk is retriable; once we've yielded, we cannot retry without
+    // duplicating output.
+    while (attempt <= maxRetries) {
+      const collected: ChatStreamChunk[] = [];
+      const started = Date.now();
+      const tag = { provider: provider.name, model: candidate.model.id };
+      try {
+        for await (const raw of provider.streamChat({
+          ...effectiveRequest,
+          model: candidate.model.id,
+        })) {
+          const chunk: ChatStreamChunk = { ...raw, provider: tag.provider, model: tag.model };
+          collected.push(chunk);
+          yield chunk;
+          if (chunk.done) {
+            const final = collected[collected.length - 1];
+            const usage = final.usage;
+            this.recordSuccess(
+              provider.name,
+              candidate.model.id,
+              { usage } as ChatResponse,
+              Date.now() - started,
+            );
+            return;
+          }
+        }
+        // Stream ended without an explicit done marker — treat as complete.
+        this.recordSuccess(
+          provider.name,
+          candidate.model.id,
+          {} as ChatResponse,
+          Date.now() - started,
+        );
+        return;
+      } catch (error) {
+        const retryable = isRetryableError(error);
+        this.recordError(provider.name, candidate.model.id, retryable, error);
+        // Only retry if nothing has been emitted yet AND it's retryable.
+        if (collected.length === 0 && retryable && attempt < maxRetries) {
+          attempt += 1;
+          await sleep(this.retry.baseDelayMs * attempt);
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 
   getUsage(options?: { by?: "provider" | "model" }): Record<string, UsageStats> {
@@ -170,13 +303,14 @@ export class ModelRouter {
     providerName: string,
     modelId: string,
     response: ChatResponse,
-    latencyMs: number
+    latencyMs: number,
   ): void {
     const providerStats = this.getOrInitUsage(this.usageByProvider, providerName);
     const modelStats = this.getOrInitUsage(this.usageByModel, `${providerName}/${modelId}`);
     for (const stats of [providerStats, modelStats]) {
       stats.requests += 1;
       stats.successes += 1;
+      stats.consecutiveErrors = 0;
       stats.lastLatencyMs = latencyMs;
       stats.avgLatencyMs =
         stats.successes === 1
@@ -191,18 +325,45 @@ export class ModelRouter {
     }
   }
 
-  private recordError(providerName: string, modelId: string, retryable: boolean): void {
+  private recordError(
+    providerName: string,
+    modelId: string,
+    retryable: boolean,
+    error: unknown,
+  ): void {
     for (const [map, key] of [
       [this.usageByProvider, providerName],
-      [this.usageByModel, `${providerName}/${modelId}`]
+      [this.usageByModel, `${providerName}/${modelId}`],
     ] as const) {
       const stats = this.getOrInitUsage(map, key);
       stats.requests += 1;
       stats.errors += 1;
       if (retryable) {
-        stats.cooldownUntil = Date.now() + this.cooldownMs;
+        stats.consecutiveErrors += 1;
+        // Only enter cooldown once the model has failed enough times in a row
+        // to look genuinely degraded — a single transient blip is tolerated.
+        if (stats.consecutiveErrors >= this.cooldownThreshold) {
+          stats.cooldownUntil = Date.now() + this.cooldownFromError(error);
+        }
+      } else {
+        // Non-retryable (4xx) failures reset the streak — they're not a sign
+        // of upstream degradation, just a bad request for this model.
+        stats.consecutiveErrors = 0;
       }
     }
+  }
+
+  // Prefers the upstream's Retry-After when present; falls back to the router's
+  // fixed cooldown window otherwise.
+  private cooldownFromError(error: unknown): number {
+    if (
+      error instanceof Error &&
+      "retryAfterMs" in error &&
+      typeof error.retryAfterMs === "number"
+    ) {
+      return Math.max(error.retryAfterMs, 1000);
+    }
+    return this.cooldownMs;
   }
 
   private getOrInitUsage(map: Map<string, UsageStats>, key: string): UsageStats {
@@ -212,11 +373,12 @@ export class ModelRouter {
       requests: 0,
       successes: 0,
       errors: 0,
+      consecutiveErrors: 0,
       promptTokens: 0,
       completionTokens: 0,
       totalTokens: 0,
       avgLatencyMs: 0,
-      lastLatencyMs: 0
+      lastLatencyMs: 0,
     };
     map.set(key, created);
     return created;
@@ -243,7 +405,10 @@ export class ModelRouter {
     if (!request.fallbackToRest) return head;
 
     const seen = new Set(head);
-    const tail = this.sort(filteredTier.filter((c) => !seen.has(c)), request.sortBy);
+    const tail = this.sort(
+      filteredTier.filter((c) => !seen.has(c)),
+      request.sortBy,
+    );
     return [...head, ...tail];
   }
 
@@ -306,29 +471,41 @@ export class ModelRouter {
   }
 
   private async getCandidates(refresh: boolean): Promise<Candidate[]> {
-    if (!refresh && this.catalogCache) {
-      return this.catalogCache;
+    const now = Date.now();
+    // catalogTtlMs === 0 disables caching entirely (re-discover every call);
+    // otherwise the cache is valid until the TTL elapses.
+    const cacheValid =
+      this.catalogTtlMs > 0 &&
+      !refresh &&
+      this.catalogCache &&
+      now - this.catalogCacheAt < this.catalogTtlMs;
+    if (cacheValid) {
+      return this.catalogCache!;
     }
 
-    const discovered = await Promise.all(
+    // Promise.allSettled so a single broken provider never tanks the whole
+    // catalog — its models are simply absent and the rest keep working.
+    const settled = await Promise.allSettled(
       this.providers.map(async (provider) => {
         const models = await provider.listModels();
-        return models.map((model) => ({
-          provider,
-          model: withTier(model)
-        }));
-      })
+        return models.map((model) => ({ provider, model: withTier(model) }));
+      }),
     );
 
-    this.catalogCache = discovered.flat().filter((candidate) => {
-      if (this.freeOnly && !candidate.model.free) {
-        return false;
-      }
+    const catalog = settled
+      .filter((r): r is PromiseFulfilledResult<Candidate[]> => r.status === "fulfilled")
+      .flatMap((r) => r.value)
+      .filter((candidate) => {
+        if (this.freeOnly && !candidate.model.free) {
+          return false;
+        }
 
-      return candidate.model.capabilities.chat !== false;
-    });
+        return candidate.model.capabilities.chat !== false;
+      });
 
-    return this.catalogCache;
+    this.catalogCache = catalog;
+    this.catalogCacheAt = now;
+    return catalog;
   }
 }
 
@@ -344,7 +521,7 @@ function matchModel(candidates: Candidate[], target: string): Candidate[] {
   return candidates.filter(
     (candidate) =>
       candidate.model.id === target ||
-      `${candidate.provider.name}/${candidate.model.id}` === target
+      `${candidate.provider.name}/${candidate.model.id}` === target,
   );
 }
 

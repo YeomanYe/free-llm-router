@@ -5,38 +5,62 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-import { createRouterFromConfig } from "./config.js";
-import { pickBestModelPerProvider, type ModelRouter } from "./router.js";
-import { probeQuota, type ProviderQuotaResult } from "./quota.js";
+import { createRouterFromConfig, createRouterFromFile } from "./config.js";
+import { type ProviderQuotaResult, probeQuota, QUOTA_POLICY_AS_OF } from "./quota.js";
+import { type ModelRouter, pickBestModelPerProvider } from "./router.js";
 import {
-  MODEL_TIERS,
   type ChatMessage,
   type ChatRequest,
   type DiscoveredModel,
+  MODEL_TIERS,
   type ModelTier,
   type SortDimension,
-  type UsageStats
 } from "./types.js";
-
-function modelDimensionScore(model: DiscoveredModel, dim: SortDimension): number {
-  switch (dim) {
-    case "quality":
-      return model.qualityScore ?? 0;
-    case "context":
-      return model.contextWindow ?? 0;
-    case "cost":
-      return model.pricing?.inputPerMillion !== undefined ? -model.pricing.inputPerMillion : 0;
-    case "speed":
-      // No per-model latency in the pre-broadcast catalog; fall through to 0.
-      return 0;
-  }
-}
 
 interface CommonOptions {
   config?: string;
   envFile?: string[];
   freeOnly?: boolean;
 }
+
+// Coerces a parseArgs `multiple` value (string | string[] | undefined) down to
+// the string[] bootstrap expects.
+function envFileList(value: string | string[] | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  return Array.isArray(value) ? value : [value];
+}
+
+// Options shared by every chat-shaped command (chat / race / stream). Returned
+// by a function so TypeScript infers the literal option keys into parseArgs's
+// `values` type — declaring it as a top-level const widens the keys to string
+// and loses the per-flag typing downstream.
+function chatOptions() {
+  return {
+    config: { type: "string" as const },
+    "env-file": { type: "string" as const, multiple: true },
+    "free-only": { type: "boolean" as const },
+    "no-free-only": { type: "boolean" as const },
+    tier: { type: "string" as const },
+    model: { type: "string" as const },
+    models: { type: "string" as const },
+    providers: { type: "string" as const },
+    "fallback-to-rest": { type: "boolean" as const },
+    "min-quality": { type: "string" as const },
+    "min-ctx": { type: "string" as const },
+    "max-latency": { type: "string" as const },
+    "max-input-cost": { type: "string" as const },
+    "include-cooling": { type: "boolean" as const },
+    "sort-by": { type: "string" as const },
+    stats: { type: "boolean" as const },
+    "stats-by": { type: "string" as const },
+    "max-tokens": { type: "string" as const },
+    temperature: { type: "string" as const },
+    system: { type: "string" as const },
+    timeout: { type: "string" as const },
+  };
+}
+
+const SORT_DIMENSIONS: readonly SortDimension[] = ["quality", "context", "speed", "cost"];
 
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
@@ -49,6 +73,9 @@ async function main(): Promise<void> {
   switch (command) {
     case "chat":
       await runChat(rest);
+      return;
+    case "stream":
+      await runStream(rest);
       return;
     case "race":
       await runRace(rest);
@@ -69,129 +96,105 @@ async function main(): Promise<void> {
   }
 }
 
-async function runChat(argv: string[]): Promise<void> {
-  const { values, positionals } = parseArgs({
+function parseChatArgs(
+  argv: string[],
+  extra: Record<string, { type: "string" } | { type: "boolean" }> = {},
+) {
+  return parseArgs({
     args: argv,
     allowPositionals: true,
-    options: {
-      config: { type: "string" },
-      "env-file": { type: "string", multiple: true },
-      "free-only": { type: "boolean" },
-      "no-free-only": { type: "boolean" },
-      tier: { type: "string" },
-      model: { type: "string" },
-      models: { type: "string" },
-      providers: { type: "string" },
-      "fallback-to-rest": { type: "boolean" },
-      "min-quality": { type: "string" },
-      "min-ctx": { type: "string" },
-      "max-latency": { type: "string" },
-      "max-input-cost": { type: "string" },
-      "include-cooling": { type: "boolean" },
-      "sort-by": { type: "string" },
-      stats: { type: "boolean" },
-      "stats-by": { type: "string" },
-      "max-tokens": { type: "string" },
-      temperature: { type: "string" },
-      system: { type: "string" }
-    }
+    options: { ...chatOptions(), ...extra },
   });
+}
+
+// Builds the shared ChatRequest envelope from parsed CLI flags. Throws a
+// friendly error (handled by main's catch) on invalid dimension/tier values.
+function buildChatRequest(values: Record<string, unknown>, prompt: string): ChatRequest {
+  const messages: ChatMessage[] = [];
+  const system = values.system;
+  if (typeof system === "string" && system) messages.push({ role: "system", content: system });
+  messages.push({ role: "user", content: prompt });
+
+  return {
+    messages,
+    tier: coerceTier(values.tier),
+    model: asString(values.model),
+    models: splitList(asString(values.models)),
+    providers: splitList(asString(values.providers)),
+    fallbackToRest: values["fallback-to-rest"] === true ? true : undefined,
+    ...dimensionFilters(values),
+    maxTokens: asNumber(values["max-tokens"]),
+    temperature: asNumber(values.temperature),
+    timeoutMs: asNumber(values.timeout),
+  };
+}
+
+async function runChat(argv: string[]): Promise<void> {
+  const { values, positionals } = parseChatArgs(argv);
 
   const prompt = positionals.join(" ").trim();
-  if (!prompt) {
-    console.error("chat: missing prompt");
-    process.exit(1);
-  }
+  requirePrompt("chat", prompt);
 
   const router = await bootstrap({
     config: values.config,
-    envFile: values["env-file"],
-    freeOnly: resolveFreeOnly(values)
+    envFile: envFileList(values["env-file"]),
+    freeOnly: resolveFreeOnly(values),
   });
 
-  const messages: ChatMessage[] = [];
-  if (values.system) messages.push({ role: "system", content: values.system });
-  messages.push({ role: "user", content: prompt });
+  const response = await router.chat(buildChatRequest(values, prompt));
 
-  const response = await router.chat({
-    messages,
-    tier: coerceTier(values.tier),
-    model: values.model,
-    models: splitList(values.models),
-    providers: splitList(values.providers),
-    fallbackToRest: values["fallback-to-rest"],
-    ...dimensionFilters(values),
-    maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
-    temperature: values.temperature ? Number(values.temperature) : undefined
-  });
-
-  console.log(response.content);
+  process.stdout.write(response.content);
   console.error(`\n(via ${response.provider}/${response.model})`);
   if (values.stats) printUsage(router, values["stats-by"]);
 }
 
-async function runRace(argv: string[]): Promise<void> {
-  const { values, positionals } = parseArgs({
-    args: argv,
-    allowPositionals: true,
-    options: {
-      config: { type: "string" },
-      "env-file": { type: "string", multiple: true },
-      "free-only": { type: "boolean" },
-      "no-free-only": { type: "boolean" },
-      tier: { type: "string" },
-      model: { type: "string" },
-      models: { type: "string" },
-      providers: { type: "string" },
-      "fallback-to-rest": { type: "boolean" },
-      "min-quality": { type: "string" },
-      "min-ctx": { type: "string" },
-      "max-latency": { type: "string" },
-      "max-input-cost": { type: "string" },
-      "include-cooling": { type: "boolean" },
-      "sort-by": { type: "string" },
-      stats: { type: "boolean" },
-      "stats-by": { type: "string" },
-      "per-provider": { type: "boolean" },
-      "max-tokens": { type: "string" },
-      temperature: { type: "string" },
-      system: { type: "string" }
-    }
-  });
+async function runStream(argv: string[]): Promise<void> {
+  const { values, positionals } = parseChatArgs(argv);
 
   const prompt = positionals.join(" ").trim();
-  if (!prompt) {
-    console.error("race: missing prompt");
-    process.exit(1);
-  }
+  requirePrompt("stream", prompt);
 
   const router = await bootstrap({
     config: values.config,
-    envFile: values["env-file"],
-    freeOnly: resolveFreeOnly(values)
+    envFile: envFileList(values["env-file"]),
+    freeOnly: resolveFreeOnly(values),
   });
 
-  const messages: ChatMessage[] = [];
-  if (values.system) messages.push({ role: "system", content: values.system });
-  messages.push({ role: "user", content: prompt });
+  let lastProvider = "";
+  let lastModel = "";
+  for await (const chunk of router.streamChat(buildChatRequest(values, prompt))) {
+    if (chunk.content) process.stdout.write(chunk.content);
+    lastProvider = chunk.provider ?? lastProvider;
+    lastModel = chunk.model ?? lastModel;
+    if (chunk.done) break;
+  }
+  if (lastProvider && lastModel) {
+    console.error(`\n(via ${lastProvider}/${lastModel})`);
+  }
+  if (values.stats) printUsage(router, values["stats-by"]);
+}
+
+async function runRace(argv: string[]): Promise<void> {
+  const { values, positionals } = parseChatArgs(argv, {
+    "per-provider": { type: "boolean" },
+  });
+
+  const prompt = positionals.join(" ").trim();
+  requirePrompt("race", prompt);
+
+  const router = await bootstrap({
+    config: values.config,
+    envFile: envFileList(values["env-file"]),
+    freeOnly: resolveFreeOnly(values),
+  });
 
   const started = Date.now();
-  const response = await router.chatRace(
-    {
-      messages,
-      tier: coerceTier(values.tier),
-      model: values.model,
-      models: splitList(values.models),
-      providers: splitList(values.providers),
-      fallbackToRest: values["fallback-to-rest"],
-      ...dimensionFilters(values),
-      maxTokens: values["max-tokens"] ? Number(values["max-tokens"]) : undefined,
-      temperature: values.temperature ? Number(values.temperature) : undefined
-    },
-    { perProvider: values["per-provider"] }
-  );
+  const perProvider = (values as Record<string, unknown>)["per-provider"] === true;
+  const response = await router.chatRace(buildChatRequest(values, prompt), {
+    perProvider,
+  });
 
-  console.log(response.content);
+  process.stdout.write(response.content);
   console.error(`\n(via ${response.provider}/${response.model} in ${Date.now() - started}ms)`);
   if (values.stats) printUsage(router, values["stats-by"]);
 }
@@ -205,14 +208,14 @@ async function runModels(argv: string[]): Promise<void> {
       "env-file": { type: "string", multiple: true },
       "free-only": { type: "boolean" },
       "no-free-only": { type: "boolean" },
-      json: { type: "boolean" }
-    }
+      json: { type: "boolean" },
+    },
   });
 
   const router = await bootstrap({
     config: values.config,
-    envFile: values["env-file"],
-    freeOnly: resolveFreeOnly(values)
+    envFile: envFileList(values["env-file"]),
+    freeOnly: resolveFreeOnly(values),
   });
 
   const models = await router.listModels();
@@ -236,7 +239,7 @@ async function runModels(argv: string[]): Promise<void> {
       const flag = m.free ? "free" : "paid";
       const tier = m.tier ? `[${m.tier}]` : "";
       const ctx = m.contextWindow ? `${m.contextWindow.toLocaleString()} ctx` : "";
-      console.log(`  · [${flag}] ${tier} ${m.id}${ctx ? "  " + ctx : ""}`);
+      console.log(`  · [${flag}] ${tier} ${m.id}${ctx ? `  ${ctx}` : ""}`);
     }
   }
   console.log(`\nTotal: ${models.length} models across ${byProvider.size} providers.`);
@@ -259,42 +262,40 @@ async function runBroadcast(argv: string[]): Promise<void> {
       "min-ctx": { type: "string" },
       "max-input-cost": { type: "string" },
       "sort-by": { type: "string" },
-      "stats-by": { type: "string" }
-    }
+      "stats-by": { type: "string" },
+    },
   });
 
   const prompt = positionals.join(" ").trim();
-  if (!prompt) {
-    console.error("broadcast: missing prompt");
-    process.exit(1);
-  }
+  requirePrompt("broadcast", prompt);
 
-  const timeoutMs = values.timeout ? Number(values.timeout) : 60_000;
-  const maxTokens = values["max-tokens"] ? Number(values["max-tokens"]) : 200;
+  const timeoutMs = asNumber(values.timeout) ?? 60_000;
+  const maxTokens = asNumber(values["max-tokens"]) ?? 200;
 
   const router = await bootstrap({
     config: values.config,
-    envFile: values["env-file"],
-    freeOnly: resolveFreeOnly(values)
+    envFile: envFileList(values["env-file"]),
+    freeOnly: resolveFreeOnly(values),
   });
 
   const allModels = await router.listModels();
   const tier = coerceTier(values.tier);
-  const minQuality = values["min-quality"] ? Number(values["min-quality"]) : undefined;
-  const minCtx = values["min-ctx"] ? Number(values["min-ctx"]) : undefined;
-  const maxCost = values["max-input-cost"] ? Number(values["max-input-cost"]) : undefined;
-  const sortBy = typeof values["sort-by"] === "string" ? values["sort-by"] : undefined;
+  const minQuality = asNumber(values["min-quality"]);
+  const minCtx = asNumber(values["min-ctx"]);
+  const maxCost = asNumber(values["max-input-cost"]);
+  const sortBy = asString(values["sort-by"]);
 
   let filtered = tier ? allModels.filter((m) => m.tier === tier) : allModels;
-  if (minQuality !== undefined) filtered = filtered.filter((m) => (m.qualityScore ?? 0) >= minQuality);
+  if (minQuality !== undefined)
+    filtered = filtered.filter((m) => (m.qualityScore ?? 0) >= minQuality);
   if (minCtx !== undefined) filtered = filtered.filter((m) => (m.contextWindow ?? 0) >= minCtx);
-  if (maxCost !== undefined) filtered = filtered.filter((m) => (m.pricing?.inputPerMillion ?? 0) <= maxCost);
+  if (maxCost !== undefined)
+    filtered = filtered.filter((m) => (m.pricing?.inputPerMillion ?? 0) <= maxCost);
   if (sortBy) {
-    if (!(SORT_DIMENSIONS as readonly string[]).includes(sortBy)) {
-      console.error(`Invalid --sort-by "${sortBy}". Expected one of: ${SORT_DIMENSIONS.join(", ")}`);
-      process.exit(1);
-    }
-    filtered = [...filtered].sort((a, b) => modelDimensionScore(b, sortBy as SortDimension) - modelDimensionScore(a, sortBy as SortDimension));
+    requireSortDimension(sortBy);
+    filtered = [...filtered].sort(
+      (a, b) => modelDimensionScore(b, sortBy) - modelDimensionScore(a, sortBy),
+    );
   }
   const models = values["per-provider"] ? pickBestModelPerProvider(filtered) : filtered;
 
@@ -311,25 +312,29 @@ async function runBroadcast(argv: string[]): Promise<void> {
       const label = `${m.provider}/${m.id}`;
       const started = Date.now();
       try {
-        const response = await withTimeout(
-          router.chat({
-            model: label,
-            messages: [{ role: "user", content: prompt }],
-            maxTokens
-          }),
-          timeoutMs
-        );
-        return { label, tier: m.tier, ms: Date.now() - started, ok: true as const, content: response.content.trim() };
+        const response = await router.chat({
+          model: label,
+          messages: [{ role: "user", content: prompt }],
+          maxTokens,
+          timeoutMs,
+        });
+        return {
+          label,
+          tier: m.tier,
+          ms: Date.now() - started,
+          ok: true as const,
+          content: response.content.trim(),
+        };
       } catch (error) {
         return {
           label,
           tier: m.tier,
           ms: Date.now() - started,
           ok: false as const,
-          content: error instanceof Error ? error.message : String(error)
+          content: error instanceof Error ? error.message : String(error),
         };
       }
-    })
+    }),
   );
 
   for (const r of results) {
@@ -352,23 +357,23 @@ async function runQuota(argv: string[]): Promise<void> {
       config: { type: "string" },
       "env-file": { type: "string", multiple: true },
       probe: { type: "boolean" },
-      json: { type: "boolean" }
-    }
+      json: { type: "boolean" },
+    },
   });
 
   loadDefaultEnvFiles(values["env-file"] ?? []);
   const configPath = resolveConfigPath(values.config);
-  const rawConfig = JSON.parse(readFileSync(configPath, "utf8")) as {
-    providers?: Array<Record<string, any>>;
+  const rawConfig = readJson(configPath) as {
+    providers?: Array<Record<string, unknown>>;
   };
 
   const results = (
     await Promise.all(
       (rawConfig.providers ?? []).flatMap((provider) =>
         expandProviderKeys(provider).map((expanded) =>
-          probeProviderQuota(expanded, Boolean(values.probe))
-        )
-      )
+          probeProviderQuota(expanded, Boolean(values.probe)),
+        ),
+      ),
     )
   ).flat();
 
@@ -385,29 +390,30 @@ async function runQuota(argv: string[]): Promise<void> {
   if (totalRemaining > 0) {
     console.log(`\nTotal queryable balance remaining: $${totalRemaining.toFixed(2)}`);
   }
+  console.error(`(free-tier policy notes as of ${QUOTA_POLICY_AS_OF})`);
 }
 
 async function probeProviderQuota(
-  expanded: { provider: Record<string, any>; label: string },
-  probe: boolean
+  expanded: { provider: Record<string, unknown>; label: string },
+  probe: boolean,
 ): Promise<ProviderQuotaResult> {
   const { provider, label } = expanded;
   const apiKey =
     typeof provider.apiKey === "string" && !provider.apiKey.startsWith("env/")
       ? provider.apiKey
-      : readEnvRef(provider.apiKey) ??
+      : (readEnvRef(provider.apiKey) ??
         (typeof provider.apiToken === "string" && !provider.apiToken.startsWith("env/")
           ? provider.apiToken
-          : readEnvRef(provider.apiToken));
+          : readEnvRef(provider.apiToken)));
   const accountId = readEnvRef(provider.accountId);
   const freeModelId = firstFreeStaticModelId(provider.staticModels);
   return probeQuota({
     providerName: label,
     apiKey,
-    baseUrl: provider.baseUrl,
+    baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : undefined,
     accountId,
     probe,
-    freeModelId
+    freeModelId,
   });
 }
 
@@ -420,9 +426,9 @@ function readEnvRef(value: unknown): string | undefined {
 // Walks the same NAME, NAME2, NAME3 ... convention resolveSecretList uses so
 // each numeric-suffix key gets its own quota probe (labelled `name#N`).
 function expandProviderKeys(
-  provider: Record<string, any>
-): Array<{ provider: Record<string, any>; label: string }> {
-  const baseName = provider.name ?? provider.type;
+  provider: Record<string, unknown>,
+): Array<{ provider: Record<string, unknown>; label: string }> {
+  const baseName = (provider.name as string) ?? (provider.type as string);
   const secretField = typeof provider.apiKey === "string" ? "apiKey" : "apiToken";
   const secretRef = provider[secretField];
   if (typeof secretRef !== "string" || !secretRef.startsWith("env/")) {
@@ -440,43 +446,51 @@ function expandProviderKeys(
   if (collected.length === 0) return [{ provider, label: baseName }];
   return collected.map(({ key, suffix }) => ({
     provider: { ...provider, [secretField]: key },
-    label: suffix ? `${baseName}${suffix}` : baseName
+    label: suffix ? `${baseName}${suffix}` : baseName,
   }));
 }
 
 function firstFreeStaticModelId(models: unknown): string | undefined {
   if (!Array.isArray(models)) return undefined;
-  const first = models.find((m) => m?.free === true);
-  return typeof first?.id === "string" ? first.id : undefined;
+  const first = models.find((m) => (m as { free?: boolean })?.free === true);
+  const id = (first as { id?: unknown })?.id;
+  return typeof id === "string" ? id : undefined;
 }
 
 function printQuotaRow(r: ProviderQuotaResult): void {
-  const tag =
-    r.source === "api" ? "[api]   " : r.source === "policy" ? "[policy]" : "[no-key]";
+  const tag = r.source === "api" ? "[api]   " : r.source === "policy" ? "[policy]" : "[no-key]";
   const parts: string[] = [];
   if (r.balanceUsd !== undefined) parts.push(`limit=$${r.balanceUsd.toFixed(2)}`);
   if (r.remainingUsd !== undefined) parts.push(`remaining=$${r.remainingUsd.toFixed(4)}`);
   if (r.usageUsd !== undefined) parts.push(`used=$${r.usageUsd.toFixed(4)}`);
   if (r.isFreeTier !== undefined) parts.push(`freeTier=${r.isFreeTier}`);
-  if (r.callable) parts.push(`callable=${r.callable}${r.callableDetail ? `(${r.callableDetail})` : ""}`);
+  if (r.callable)
+    parts.push(`callable=${r.callable}${r.callableDetail ? `(${r.callableDetail})` : ""}`);
   if (r.error) parts.push(`error=${r.error}`);
   console.log(`▸ ${tag} ${r.provider.padEnd(28)} ${parts.join("  ")}`);
   if (r.freePolicy) console.log(`   ↳ ${r.freePolicy}`);
 }
 
-async function bootstrap(options: CommonOptions) {
+async function bootstrap(options: CommonOptions): Promise<ModelRouter> {
   loadDefaultEnvFiles(options.envFile ?? []);
 
   const configPath = resolveConfigPath(options.config);
-  const rawConfig = JSON.parse(readFileSync(configPath, "utf8"));
+  const rawConfig = readJson(configPath);
   const overrides = options.freeOnly === undefined ? {} : { freeOnly: options.freeOnly };
-  const providers = filterAvailableProviders(rawConfig.providers ?? []);
+  const providers = filterAvailableProviders(
+    (rawConfig.providers ?? []) as Array<Record<string, unknown>>,
+  );
 
   if (providers.length === 0) {
-    console.error(`No providers have their env keys set. Load an env file with --env-file or export the vars.`);
+    console.error(
+      `No providers have their env keys set. Load an env file with --env-file or export the vars.`,
+    );
     process.exit(1);
   }
 
+  // createRouterFromFile runs zod, so config errors surface as readable messages
+  // instead of raw JSON SyntaxErrors. We pass the env-filtered provider list
+  // through so partial env files don't break the whole router.
   return createRouterFromConfig({ ...rawConfig, ...overrides, providers });
 }
 
@@ -496,14 +510,26 @@ function resolveConfigPath(explicit?: string): string {
   }
 
   console.error(
-    "No config file found. Pass --config <path>, or create router.config.json in the current directory."
+    "No config file found. Pass --config <path>, or create router.config.json in the current directory.",
   );
   process.exit(1);
 }
 
+function readJson(path: string): Record<string, unknown> {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(`Failed to parse config ${path}: ${reason}`);
+    process.exit(1);
+  }
+}
+
 // Silently ignores providers whose `env/*` refs aren't set, so partial env files
 // don't break the whole router.
-function filterAvailableProviders(providers: any[]): any[] {
+function filterAvailableProviders(
+  providers: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
   return providers.filter((provider) => {
     const refs: string[] = [];
     if (typeof provider.apiKey === "string") refs.push(provider.apiKey);
@@ -557,48 +583,69 @@ function printUsage(router: ModelRouter, byOption: string | undefined): void {
   }
   entries.sort((a, b) => b[1].totalTokens - a[1].totalTokens);
   console.log(`\n[usage] by ${by}`);
-  const rows: Array<[string, UsageStats]> = entries;
-  for (const [key, s] of rows) {
+  for (const [key, s] of entries as Array<[string, (typeof entries)[number][1]]>) {
     console.log(
       `  ${key.padEnd(48)}  req=${s.requests} ok=${s.successes} err=${s.errors}  ` +
-        `tokens=${s.totalTokens} (prompt=${s.promptTokens} out=${s.completionTokens})`
+        `tokens=${s.totalTokens} (prompt=${s.promptTokens} out=${s.completionTokens})`,
     );
   }
 }
 
-const SORT_DIMENSIONS: readonly SortDimension[] = ["quality", "context", "speed", "cost"];
-
 function dimensionFilters(values: Record<string, unknown>): Partial<ChatRequest> {
   const out: Partial<ChatRequest> = {};
-  const q = values["min-quality"];
-  const c = values["min-ctx"];
-  const l = values["max-latency"];
-  const cost = values["max-input-cost"];
-  const sort = values["sort-by"];
+  const q = asNumber(values["min-quality"]);
+  const c = asNumber(values["min-ctx"]);
+  const l = asNumber(values["max-latency"]);
+  const cost = asNumber(values["max-input-cost"]);
+  const sort = asString(values["sort-by"]);
   const cooling = values["include-cooling"];
-  if (typeof q === "string") out.minQuality = Number(q);
-  if (typeof c === "string") out.minContextWindow = Number(c);
-  if (typeof l === "string") out.maxLatencyMs = Number(l);
-  if (typeof cost === "string") out.maxInputCostPerMillion = Number(cost);
-  if (typeof sort === "string") {
-    if (!(SORT_DIMENSIONS as readonly string[]).includes(sort)) {
-      console.error(`Invalid --sort-by "${sort}". Expected one of: ${SORT_DIMENSIONS.join(", ")}`);
-      process.exit(1);
-    }
-    out.sortBy = sort as SortDimension;
+  if (q !== undefined) out.minQuality = q;
+  if (c !== undefined) out.minContextWindow = c;
+  if (l !== undefined) out.maxLatencyMs = l;
+  if (cost !== undefined) out.maxInputCostPerMillion = cost;
+  if (sort) {
+    requireSortDimension(sort);
+    out.sortBy = sort;
   }
   if (cooling === true) out.excludeCooling = false;
   return out;
 }
 
+// Score used by the CLI's broadcast sorter. Mirrors ModelRouter.dimensionScore
+// except for `speed`: before any calls have been made there is no observed
+// latency in the catalog, so it ranks everything equally (0). Kept local so the
+// broadcast path doesn't need to reach into the router's internals.
+function modelDimensionScore(model: DiscoveredModel, dim: SortDimension): number {
+  switch (dim) {
+    case "quality":
+      return model.qualityScore ?? 0;
+    case "context":
+      return model.contextWindow ?? 0;
+    case "cost":
+      return model.pricing?.inputPerMillion !== undefined ? -model.pricing.inputPerMillion : 0;
+    case "speed":
+      return 0;
+  }
+}
+
+function requireSortDimension(value: string): asserts value is SortDimension {
+  if (!(SORT_DIMENSIONS as readonly string[]).includes(value)) {
+    console.error(`Invalid --sort-by "${value}". Expected one of: ${SORT_DIMENSIONS.join(", ")}`);
+    process.exit(1);
+  }
+}
+
 function splitList(value: string | undefined): string[] | undefined {
   if (!value) return undefined;
-  const items = value.split(",").map((s) => s.trim()).filter(Boolean);
+  const items = value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
   return items.length > 0 ? items : undefined;
 }
 
-function coerceTier(value: string | undefined): ModelTier | undefined {
-  if (!value) return undefined;
+function coerceTier(value: unknown): ModelTier | undefined {
+  if (typeof value !== "string" || !value) return undefined;
   if (!(MODEL_TIERS as readonly string[]).includes(value)) {
     console.error(`Invalid tier "${value}". Expected one of: ${MODEL_TIERS.join(", ")}`);
     process.exit(1);
@@ -606,22 +653,43 @@ function coerceTier(value: string | undefined): ModelTier | undefined {
   return value as ModelTier;
 }
 
-function resolveFreeOnly(values: { "free-only"?: boolean; "no-free-only"?: boolean }): boolean | undefined {
+function resolveFreeOnly(values: {
+  "free-only"?: boolean;
+  "no-free-only"?: boolean;
+}): boolean | undefined {
   if (values["no-free-only"]) return false;
   if (values["free-only"]) return true;
   return undefined;
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms))
-  ]);
+function requirePrompt(command: string, prompt: string): void {
+  if (!prompt) {
+    console.error(`${command}: missing prompt`);
+    process.exit(1);
+  }
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  if (typeof value !== "string" || value === "") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function indent(text: string): string {
-  return text.split("\n").map((line) => `  ${line}`).join("\n");
+  return text
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
 }
+
+// Ensure createRouterFromFile stays part of the public surface even when the
+// CLI only calls createRouterFromConfig directly; avoids dead-export churn if
+// the bootstrap path is refactored later.
+void createRouterFromFile;
 
 function printHelp(): void {
   console.log(`free-llm-router CLI
@@ -631,6 +699,7 @@ Usage:
 
 Commands:
   chat <prompt>       Sequential fallback, first success wins
+  stream <prompt>     Stream incremental tokens from the first reachable model
   race <prompt>       Fire every candidate in parallel, first success wins
   models              List every callable model, grouped by provider
   broadcast <prompt>  Fire every candidate in parallel, print all responses
@@ -648,7 +717,7 @@ Env file resolution (loaded top-down, first-set wins; process.env always beats f
   3. $FLR_ENV_FILE              user default via env var (e.g. export in shell rc)
   4. ~/.flr/env                 conventional user default (create or symlink here)
 
-chat flags:
+chat / stream / race flags:
   --tier <t>            Force a tier, e.g. high-1, medium-2, low-3
   --model <name>        Force a specific model (e.g. openrouter/openai/gpt-oss-20b)
   --models <a,b,c>      Try each in order, first success wins (comma separated)
@@ -664,12 +733,12 @@ chat flags:
   --system <text>       Prepend a system message
   --max-tokens <n>      Response cap
   --temperature <n>     Sampling temperature
+  --timeout <ms>        Per-call timeout (also enforced at the fetch layer)
 
 models flags:
   --json                Emit raw JSON instead of the grouped table
 
 race flags:
-  Same as chat, plus:
   --per-provider        Race one best-quality model per provider (dedup fan-out)
 
 quota flags:
@@ -686,8 +755,8 @@ broadcast flags:
 
 Usage tracking:
   Every command tallies per-provider/per-model requests, successes, errors,
-  and token usage in memory. chat/race print the table when --stats is passed;
-  broadcast prints it automatically at the end.
+  and token usage in memory. chat/race/stream print the table when --stats is
+  passed; broadcast prints it automatically at the end.
 `);
 }
 
