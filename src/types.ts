@@ -68,6 +68,23 @@ export interface ChatResponse {
   usage?: ChatUsage;
 }
 
+export interface ObjectRequest extends ChatRequest {
+  /** JSON Schema object describing the desired output shape. Callers build it. */
+  schema: Record<string, unknown>;
+  /** Optional tool name; providers default to "structured_output". */
+  schemaName?: string;
+}
+
+export interface ObjectResponse {
+  id: string;
+  model: string;
+  provider: string;
+  /** The model's output parsed into the requested schema shape. */
+  object: unknown;
+  raw: unknown;
+  usage?: ChatUsage;
+}
+
 export interface ChatAllResult {
   provider: string;
   model: string;
@@ -134,6 +151,10 @@ export interface ProviderAdapter {
   readonly kind: string;
   listModels(): Promise<DiscoveredModel[]>;
   chat(request: ChatRequest & { model: string }): Promise<ChatResponse>;
+  // Optional structured output. Providers that can enforce a JSON Schema
+  // (Anthropic tool-use, OpenAI tool-calling) implement this; others leave it
+  // undefined and the router skips them for object() calls.
+  object?(request: ObjectRequest & { model: string }): Promise<ObjectResponse>;
 }
 
 export interface RetryPolicy {
