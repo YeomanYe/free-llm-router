@@ -8,6 +8,8 @@ import {
   type DiscoveredModel,
   MODEL_TIERS,
   type ModelTier,
+  type ObjectRequest,
+  type ObjectResponse,
   type ProviderAdapter,
   type RetryPolicy,
   type RouterOptions,
@@ -121,6 +123,38 @@ export class ModelRouter {
   }
 
   /**
+   * Structured-output variant of chat(). Mirrors chat()'s candidate selection
+   * and sequential fallback, but filters candidates to providers that
+   * implement object() (structured JSON Schema output). Providers without
+   * object() are skipped.
+   */
+  async object(request: ObjectRequest): Promise<ObjectResponse> {
+    const all = await this.selectCandidates(request);
+    // Only providers that implement object() can serve structured-output calls.
+    const candidates = all.filter((c) => typeof c.provider.object === "function");
+
+    if (candidates.length === 0) {
+      throw new NoAvailableModelError();
+    }
+
+    let lastError: unknown;
+
+    for (const candidate of candidates) {
+      try {
+        return await this.callObjectWithRetry(candidate, request);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    throw new NoAvailableModelError();
+  }
+
+  /**
    * Streams incremental content chunks. Tries candidates in order; on a
    * retryable failure before any byte is yielded, falls through to the next
    * candidate (matching chat's sequential semantics). Once the first chunk is
@@ -207,6 +241,48 @@ export class ModelRouter {
       }
     }
     throw lastError instanceof Error ? lastError : new Error("chat failed");
+  }
+
+  private async callObjectWithRetry(
+    candidate: Candidate,
+    request: ObjectRequest,
+  ): Promise<ObjectResponse> {
+    const effectiveRequest = { ...request, timeoutMs: request.timeoutMs ?? this.defaultTimeoutMs };
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.retry.maxRetries; attempt += 1) {
+      const started = Date.now();
+      try {
+        const response = await candidate.provider.object!({
+          ...effectiveRequest,
+          model: candidate.model.id,
+        });
+        // recordSuccess is typed for ChatResponse; it only reads usage, so
+        // synthesize a minimal ChatResponse-shaped object carrying usage.
+        this.recordSuccess(
+          candidate.provider.name,
+          candidate.model.id,
+          {
+            id: response.id,
+            model: response.model,
+            provider: response.provider,
+            content: "",
+            raw: response.raw,
+            ...(response.usage ? { usage: response.usage } : {}),
+          },
+          Date.now() - started,
+        );
+        return response;
+      } catch (error) {
+        lastError = error;
+        const retryable = isRetryableError(error);
+        this.recordError(candidate.provider.name, candidate.model.id, retryable, error);
+        if (!retryable) break;
+        if (attempt < this.retry.maxRetries) {
+          await sleep(this.retry.baseDelayMs * attempt);
+        }
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("object failed");
   }
 
   private async *streamWithRetry(
