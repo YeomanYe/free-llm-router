@@ -1,0 +1,62 @@
+name: Deploy landing to GitHub Pages
+
+# Runs on every push that touches the landing app or this file itself, plus
+# a manual run button. Builds the Vite app and force-pushes the dist folder
+# to the `gh-pages` branch — GitHub Pages already serves from that branch,
+# so no repo settings change is required.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "landing/**"
+      - ".github/workflows/deploy-landing.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: gh-pages-publish
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: landing/pnpm-lock.yaml
+
+      - name: Install
+        working-directory: landing
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: landing
+        run: pnpm build
+
+      - name: Publish to gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Turn landing/dist into its own git repo, seed it with a single
+        # orphan commit, and force-push over `gh-pages`. Keeps the branch
+        # tiny and history-free — matches the manual `git worktree` recipe
+        # we used to publish the first version.
+        run: |
+          cd landing/dist
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -q -m "publish ${GITHUB_SHA::7}"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
