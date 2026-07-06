@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import { z } from "zod";
+import { AnthropicMessagesProvider } from "./providers/anthropic.js";
 import { CloudflareWorkersAIProvider } from "./providers/cloudflare.js";
 import { OpenAICompatibleProvider } from "./providers/openaiCompatible.js";
 import { ModelRouter } from "./router.js";
@@ -37,9 +38,20 @@ const cloudflareProviderSchema = z.object({
   timeoutMs: z.number().int().positive().optional(),
 });
 
+const anthropicProviderSchema = z.object({
+  type: z.literal("anthropic-messages"),
+  name: z.string(),
+  baseUrl: z.string().url(),
+  apiKey: z.string(),
+  headers: z.record(z.string()).optional(),
+  staticModels: z.array(staticModelSchema).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
 const providerSchema = z.discriminatedUnion("type", [
   openAICompatibleProviderSchema,
   cloudflareProviderSchema,
+  anthropicProviderSchema,
 ]);
 
 const configSchema = z.object({
@@ -85,6 +97,21 @@ export function createRouterFromConfig(input: unknown): ModelRouter {
             freeModelPatterns: provider.freeModelPatterns,
             staticModels: provider.staticModels,
             discoverModels: provider.discoverModels,
+            timeoutMs: provider.timeoutMs,
+          }),
+      );
+    }
+
+    if (provider.type === "anthropic-messages") {
+      const apiKeys = resolveSecretList(provider.apiKey);
+      return apiKeys.map(
+        (apiKey, index) =>
+          new AnthropicMessagesProvider({
+            name: instanceName(provider.name, index),
+            baseUrl: provider.baseUrl,
+            apiKey,
+            headers: provider.headers,
+            staticModels: provider.staticModels,
             timeoutMs: provider.timeoutMs,
           }),
       );
