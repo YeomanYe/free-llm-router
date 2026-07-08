@@ -86,6 +86,12 @@ export function createRouterFromConfig(input: unknown): ModelRouter {
   const providers: ProviderAdapter[] = config.providers.flatMap((provider): ProviderAdapter[] => {
     if (provider.type === "openai-compatible") {
       const apiKeys = resolveSecretList(provider.apiKey);
+      // apiKey 明确指定了(如 "env/NAME")但解析为空 → 运维本想给 key 却缺失 → 跳过该 provider,
+      // 不建一个必然 401 的 keyless 实例。apiKey 未指定(undefined) → 允许 keyless(部分 OpenAI
+      // 兼容端点无需 key)。
+      if (provider.apiKey !== undefined && apiKeys.length === 0) {
+        return [];
+      }
       const variants = apiKeys.length > 0 ? apiKeys : [undefined];
       return variants.map(
         (apiKey, index) =>
@@ -207,9 +213,8 @@ function resolveSecretList(value: string | undefined): string[] {
     values.push(next);
   }
 
-  if (values.length === 0) {
-    throw new Error(`Missing environment variable: ${name}`);
-  }
-
+  // env/NAME 指向的变量缺失/为空 → 返回空列表(不再 throw)。让"没配某个可选 provider
+  // 的 key"变成"优雅跳过该 provider",而不是炸掉整个 router 构造。调用方(见 openai-compatible
+  // 分支)据此跳过该 provider。
   return values;
 }

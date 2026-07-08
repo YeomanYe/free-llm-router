@@ -81,23 +81,43 @@ describe("createRouterFromConfig", () => {
     expect(providerNames).toEqual(["openrouter", "openrouter#2", "openrouter#3"]);
   });
 
-  it("throws when env/ reference has no matching variable", () => {
+  it("skips an openai-compatible provider whose env/ apiKey is missing (no throw)", async () => {
     delete process.env.TEST_MISSING_KEY;
 
-    expect(() =>
-      createRouterFromConfig({
-        providers: [
-          {
-            type: "openai-compatible",
-            name: "x",
-            baseUrl: "https://example.com/v1",
-            apiKey: "env/TEST_MISSING_KEY",
-            discoverModels: false,
-            staticModels: [{ id: "m", free: true }],
-          },
-        ],
-      }),
-    ).toThrow(/TEST_MISSING_KEY/);
+    const router = createRouterFromConfig({
+      providers: [
+        {
+          type: "openai-compatible",
+          name: "x",
+          baseUrl: "https://example.com/v1",
+          apiKey: "env/TEST_MISSING_KEY",
+          discoverModels: false,
+          staticModels: [{ id: "m", free: true }],
+        },
+      ],
+    });
+
+    // 缺 key 的 provider 被优雅跳过(不建 keyless 实例、不抛错) → 目录里没有它
+    const models = await router.listModels();
+    expect(models.some((model) => model.provider === "x")).toBe(false);
+  });
+
+  it("keeps a keyless openai-compatible provider when apiKey is omitted entirely", async () => {
+    const router = createRouterFromConfig({
+      providers: [
+        {
+          type: "openai-compatible",
+          name: "keyless",
+          baseUrl: "https://example.com/v1",
+          // apiKey 完全省略(非 env/ 空) → 允许 keyless,保留原行为
+          discoverModels: false,
+          staticModels: [{ id: "m", free: true, qualityScore: 0.5 }],
+        },
+      ],
+    });
+
+    const models = await router.listModels();
+    expect(models.some((model) => model.provider === "keyless")).toBe(true);
   });
 
   it("constructs an anthropic-messages provider", () => {
