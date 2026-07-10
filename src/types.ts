@@ -104,6 +104,17 @@ export interface ChatRequest {
   // Default true — models under cooldown (recent 429/5xx) are dropped.
   excludeCooling?: boolean;
   sortBy?: SortDimension;
+  /**
+   * Shuffle candidate order before sequential traversal.
+   * - No explicit model/models/providers: the whole tier-filtered pool is randomized.
+   * - With model/models + fallbackToRest: the explicit list keeps its order, the
+   *   fallback tail is randomized (honour the caller's stated preference, then
+   *   spread load across the rest).
+   * - With model/models and no fallbackToRest: matches for the explicit list are
+   *   shuffled among themselves (relevant when multiple providers host the same id).
+   * Override the router-level default (RouterOptions.shuffle).
+   */
+  shuffle?: boolean;
   messages: ChatMessage[];
   temperature?: number;
   maxTokens?: number;
@@ -284,4 +295,9 @@ export interface RouterOptions {
   // TTL for the discovered-model catalog cache, in ms. Default 5 minutes.
   // Pass 0 to disable caching entirely (re-discover on every call).
   catalogTtlMs?: number;
+  /**
+   * Router-level default for ChatRequest.shuffle. When true every call
+   * randomizes its candidate order unless the request sets shuffle:false.
+   */
+  shuffle?: boolean;
 }

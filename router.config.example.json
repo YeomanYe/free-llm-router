@@ -1,5 +1,6 @@
 {
   "freeOnly": true,
+  "shuffle": false,
   "retry": {
     "maxRetries": 2,
     "baseDelayMs": 200

@@ -71,6 +71,7 @@ const configSchema = z.object({
   cooldownThreshold: z.number().int().min(1).optional(),
   timeoutMs: z.number().int().positive().optional(),
   catalogTtlMs: z.number().int().min(0).optional(),
+  shuffle: z.boolean().optional(),
   providers: z.array(providerSchema).min(1),
 });
 
@@ -147,6 +148,7 @@ export function createRouterFromConfig(input: unknown): ModelRouter {
     cooldownThreshold: config.cooldownThreshold,
     timeoutMs: config.timeoutMs,
     catalogTtlMs: config.catalogTtlMs,
+    shuffle: config.shuffle,
   };
 
   return new ModelRouter(options);

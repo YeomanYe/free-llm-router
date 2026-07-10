@@ -28,6 +28,15 @@ export interface FanOutOptions {
 
 const DEFAULT_CATALOG_TTL_MS = 5 * 60_000;
 
+// Fisher–Yates shuffle. Returns the same array reference, randomized in place.
+function shuffleInPlace<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 // Keeps only the highest-qualityScore candidate per provider name, preserving
 // the first-seen provider order so downstream printing stays deterministic.
 function pickCandidates(candidates: Candidate[], options?: FanOutOptions): Candidate[] {
@@ -70,6 +79,8 @@ export class ModelRouter {
 
   private readonly catalogTtlMs: number;
 
+  private readonly shuffle: boolean;
+
   private readonly usageByProvider = new Map<string, UsageStats>();
 
   private readonly usageByModel = new Map<string, UsageStats>();
@@ -91,6 +102,7 @@ export class ModelRouter {
     this.defaultTimeoutMs = options.timeoutMs;
     // 0 disables caching (re-discover every call); otherwise honour the TTL.
     this.catalogTtlMs = options.catalogTtlMs ?? DEFAULT_CATALOG_TTL_MS;
+    this.shuffle = options.shuffle ?? false;
   }
 
   async listModels(options: { refresh?: boolean } = {}): Promise<DiscoveredModel[]> {
@@ -470,6 +482,10 @@ export class ModelRouter {
     });
     const filteredTier = this.applyDimensionFilters(tiered, request);
 
+    // shuffle resolves request > router default; explicit false on the request
+    // wins over a router-level true so callers can opt out per-call.
+    const shuffle = request.shuffle ?? this.shuffle;
+
     let head: Candidate[] | undefined;
     if (request.models && request.models.length > 0) {
       head = orderedMatch(candidates, request.models);
@@ -479,14 +495,17 @@ export class ModelRouter {
       head = orderByProviders(filteredTier, request.providers);
     }
 
-    if (head === undefined) return this.sort(filteredTier, request.sortBy);
-    if (!request.fallbackToRest) return head;
+    if (head === undefined) {
+      // No explicit pin: shuffle the whole pool when asked, else honour sortBy.
+      return shuffle ? shuffleInPlace(filteredTier) : this.sort(filteredTier, request.sortBy);
+    }
+    if (!request.fallbackToRest) {
+      return shuffle ? shuffleInPlace(head) : head;
+    }
 
     const seen = new Set(head);
-    const tail = this.sort(
-      filteredTier.filter((c) => !seen.has(c)),
-      request.sortBy,
-    );
+    const tailBase = filteredTier.filter((c) => !seen.has(c));
+    const tail = shuffle ? shuffleInPlace(tailBase) : this.sort(tailBase, request.sortBy);
     return [...head, ...tail];
   }
 

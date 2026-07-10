@@ -414,6 +414,70 @@ describe("ModelRouter", () => {
   });
 });
 
+describe("ModelRouter shuffle", () => {
+  it("spreads load across providers when shuffle is set at the router level", async () => {
+    const providers = Array.from({ length: 6 }, (_, i) => new FakeProvider(`p${i}`, "succeed"));
+    const router = new ModelRouter({
+      providers,
+      retry: { maxRetries: 0, baseDelayMs: 0 },
+      shuffle: true,
+    });
+
+    const picks = new Set<string>();
+    for (let i = 0; i < 60; i += 1) {
+      const res = await router.chat({ messages: [{ role: "user", content: "hi" }] });
+      picks.add(res.provider);
+    }
+    // With 6 always-succeed providers and Fisher–Yates shuffle, 60 calls must
+    // touch more than one — a deterministic-quality order would always pick p0.
+    expect(picks.size).toBeGreaterThan(1);
+  });
+
+  it("keeps the explicit models list order but shuffles the fallback tail", async () => {
+    const pinned = new FakeProvider("pinned", "always-fail");
+    const rest = Array.from({ length: 5 }, (_, i) => new FakeProvider(`rest${i}`, "succeed"));
+    const router = new ModelRouter({
+      providers: [pinned, ...rest],
+      retry: { maxRetries: 0, baseDelayMs: 0 },
+    });
+
+    const firstServicers = new Set<string>();
+    for (let i = 0; i < 40; i += 1) {
+      const res = await router.chat({
+        messages: [{ role: "user", content: "hi" }],
+        model: "pinned/model",
+        fallbackToRest: true,
+        shuffle: true,
+      });
+      firstServicers.add(res.provider);
+    }
+    // pinned always fails so it never serves; the servicer comes from the
+    // shuffled tail and must vary across calls.
+    expect(firstServicers.has("pinned")).toBe(false);
+    expect(firstServicers.size).toBeGreaterThan(1);
+  });
+
+  it("lets a per-call shuffle:false opt out of a router-level shuffle", async () => {
+    const p0 = new FakeProvider("p0", "succeed");
+    const p1 = new FakeProvider("p1", "succeed");
+    const router = new ModelRouter({
+      providers: [p0, p1],
+      retry: { maxRetries: 0, baseDelayMs: 0 },
+      shuffle: true,
+    });
+
+    // p0 has the higher qualityScore, so with shuffle off it always wins.
+    for (let i = 0; i < 10; i += 1) {
+      const res = await router.chat({
+        messages: [{ role: "user", content: "hi" }],
+        shuffle: false,
+        sortBy: "quality",
+      });
+      expect(res.provider).toBe("p0");
+    }
+  });
+});
+
 describe("ModelRouter streaming", () => {
   it("streams chunks from a native streamChat provider", async () => {
     const streaming = new StreamingProvider("stream", ["Hel", "lo", " world"]);
