@@ -593,7 +593,14 @@ export class ModelRouter {
       .filter((r): r is PromiseFulfilledResult<Candidate[]> => r.status === "fulfilled")
       .flatMap((r) => r.value)
       .filter((candidate) => {
-        if (this.freeOnly && !candidate.model.free) {
+        // freeOnly 过滤只作用于 discovered 模型(如 openrouter 的 :free 模型);
+        // static 模型(包括 paid provider 的 free:false 声明)始终保留,
+        // 使 paid-first 策略下 minimax 等 paid 模型不会被误过滤。
+        if (
+          this.freeOnly &&
+          !candidate.model.free &&
+          candidate.model.source === "discovered"
+        ) {
           return false;
         }
 
