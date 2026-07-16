@@ -50,6 +50,8 @@ function chatOptions() {
     "max-latency": { type: "string" as const },
     "max-input-cost": { type: "string" as const },
     "include-cooling": { type: "boolean" as const },
+    shuffle: { type: "boolean" as const },
+    "no-shuffle": { type: "boolean" as const },
     "sort-by": { type: "string" as const },
     stats: { type: "boolean" as const },
     "stats-by": { type: "string" as const },
@@ -608,6 +610,8 @@ function dimensionFilters(values: Record<string, unknown>): Partial<ChatRequest>
     out.sortBy = sort;
   }
   if (cooling === true) out.excludeCooling = false;
+  if (values["no-shuffle"] === true) out.shuffle = false;
+  else if (values.shuffle === true) out.shuffle = true;
   return out;
 }
 
@@ -729,6 +733,8 @@ chat / stream / race flags:
   --max-latency <ms>    Drop models whose observed avg latency exceeds this
   --max-input-cost <$>  Drop models whose input price/M tokens exceeds this
   --sort-by <dim>       Sort by "quality" | "context" | "speed" | "cost"
+  --shuffle             Randomize candidate order (overrides config default)
+  --no-shuffle          Keep deterministic order (overrides config default)
   --include-cooling     Include models under cooldown (recent 429/5xx)
   --system <text>       Prepend a system message
   --max-tokens <n>      Response cap
