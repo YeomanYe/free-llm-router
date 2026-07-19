@@ -2,6 +2,15 @@
   "name": "free-llm-router",
   "version": "0.2.0",
   "description": "Config-driven Node.js router for free/low-cost LLM providers with discovery, tiering, retry, fallback, and Cloudflare Workers AI support.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YeomanYe/free-llm-router.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YeomanYe/free-llm-router/issues"
+  },
+  "homepage": "https://github.com/YeomanYe/free-llm-router#readme",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

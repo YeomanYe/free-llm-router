@@ -1,6 +1,11 @@
 # Free LLM Router
 
+[![npm version](https://img.shields.io/npm/v/free-llm-router.svg)](https://www.npmjs.com/package/free-llm-router)
+[![GitHub](https://img.shields.io/badge/GitHub-YeomanYe%2Ffree--llm--router-blue?logo=github)](https://github.com/YeomanYe/free-llm-router)
+
 Config-driven Node.js router for free and low-cost LLM providers. Can be imported as a library or invoked as a CLI (`flr`).
+
+> **Source & issues:** <https://github.com/YeomanYe/free-llm-router>
 
 The project intentionally does not try to scrape or bypass provider policies. Provider APIs often do not expose whether a model is free, so free eligibility is a mix of discovery plus your maintained static policy metadata.
 
